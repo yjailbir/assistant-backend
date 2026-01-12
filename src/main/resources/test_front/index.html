@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Chat Test Client</title>
+    <script src="https://cdn.jsdelivr.net/npm/sockjs-client@1/dist/sockjs.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/stompjs@2.3.3/lib/stomp.min.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        #messages { list-style-type: none; padding: 0; }
+        #messages li { margin-bottom: 10px; padding: 5px; border-radius: 5px; }
+        .sent { background-color: #d0f0fd; text-align: right; }
+        .received { background-color: #f0f0f0; text-align: left; }
+    </style>
+</head>
+<body>
+<h2>Chat Test Client</h2>
+
+<input type="text" id="messageInput" placeholder="Type a message" />
+<button onclick="sendMessage()">Send</button>
+
+<ul id="messages"></ul>
+
+<script>
+    let stompClient;
+
+    function connect() {
+        const socket = new SockJS('http://localhost:8080/ws');
+        stompClient = Stomp.over(socket);
+
+        stompClient.connect({}, function () {
+            console.log('Connected');
+            stompClient.subscribe('/topic/messages', function (messageOutput) {
+                const response = JSON.parse(messageOutput.body);
+                showMessage(response.response, 'received');
+            });
+        });
+    }
+
+    function sendMessage() {
+        const input = document.getElementById('messageInput');
+        const message = input.value.trim();
+        if (message && stompClient) {
+            // Показываем отправленное сообщение
+            showMessage(message, 'sent');
+
+            // Отправляем на сервер
+            stompClient.send("/app/chat", {}, JSON.stringify({ message: message }));
+
+            input.value = '';
+        }
+    }
+
+    function showMessage(message, type) {
+        const li = document.createElement('li');
+        li.className = type;
+        li.textContent = message;
+        document.getElementById('messages').appendChild(li);
+        // Прокрутка вниз
+        li.scrollIntoView({ behavior: 'smooth' });
+    }
+
+    connect();
+</script>
+</body>
+</html>
