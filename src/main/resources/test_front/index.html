@@ -16,6 +16,13 @@
 <body>
 <h2>Chat Test Client</h2>
 
+<!-- 🔹 имя пользователя захардкожено -->
+<div>
+    <strong>User:</strong> <span id="username"></span>
+</div>
+
+<br/>
+
 <input type="text" id="messageInput" placeholder="Type a message" />
 <button onclick="sendMessage()">Send</button>
 
@@ -24,6 +31,11 @@
 <script>
     let stompClient;
 
+    // 🔹 МЕНЯЙ ЭТО ЗНАЧЕНИЕ В ДВУХ ВКЛАДКАХ
+    const USERNAME = "Alice"; // во второй вкладке сделай "Bob"
+
+    document.getElementById("username").textContent = USERNAME;
+
     function connect() {
         const socket = new SockJS('http://localhost:8080/ws');
         stompClient = Stomp.over(socket);
@@ -31,32 +43,36 @@
         stompClient.connect({}, function () {
             console.log('Connected');
             stompClient.subscribe('/topic/messages', function (messageOutput) {
-                const response = JSON.parse(messageOutput.body);
-                showMessage(response.response, 'received');
+                const message = JSON.parse(messageOutput.body);
+
+                const type = message.sender === USERNAME ? 'sent' : 'received';
+                showMessage(message.sender + ": " + message.content, type);
             });
         });
     }
 
     function sendMessage() {
         const input = document.getElementById('messageInput');
-        const message = input.value.trim();
-        if (message && stompClient) {
-            // Показываем отправленное сообщение
-            showMessage(message, 'sent');
+        const content = input.value.trim();
 
-            // Отправляем на сервер
-            stompClient.send("/app/chat", {}, JSON.stringify({ message: message }));
-
+        if (content && stompClient) {
+            stompClient.send(
+                "/app/chat",
+                {},
+                JSON.stringify({
+                    sender: USERNAME,
+                    content: content
+                })
+            );
             input.value = '';
         }
     }
 
-    function showMessage(message, type) {
+    function showMessage(text, type) {
         const li = document.createElement('li');
         li.className = type;
-        li.textContent = message;
+        li.textContent = text;
         document.getElementById('messages').appendChild(li);
-        // Прокрутка вниз
         li.scrollIntoView({ behavior: 'smooth' });
     }
 
