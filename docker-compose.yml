@@ -1,0 +1,14 @@
+services:
+  auth-service:
+    build:
+      context: ./auth-service
+    ports:
+      - "8081:8080"
+    container_name: auth-service
+
+  chat-service:
+    build:
+      context: ./chat-service
+    ports:
+      - "8080:8080"
+    container_name: chat-service

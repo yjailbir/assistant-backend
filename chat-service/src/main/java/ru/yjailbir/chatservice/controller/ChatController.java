@@ -1,10 +1,10 @@
-package ru.yjailbir.assistantbackend.controller;
+package ru.yjailbir.chatservice.controller;
 
 import org.springframework.messaging.handler.annotation.MessageMapping;
 import org.springframework.messaging.handler.annotation.Payload;
 import org.springframework.messaging.handler.annotation.SendTo;
 import org.springframework.stereotype.Controller;
-import ru.yjailbir.assistantbackend.dto.UserMessage;
+import ru.yjailbir.chatservice.dto.UserMessage;
 
 @Controller
 public class ChatController {

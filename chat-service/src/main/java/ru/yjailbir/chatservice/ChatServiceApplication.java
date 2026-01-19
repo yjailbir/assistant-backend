@@ -1,13 +1,13 @@
-package ru.yjailbir.assistantbackend;
+package ru.yjailbir.chatservice;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
 @SpringBootApplication
-public class AssistantBackendApplication {
+public class ChatServiceApplication {
 
     public static void main(String[] args) {
-        SpringApplication.run(AssistantBackendApplication.class, args);
+        SpringApplication.run(ChatServiceApplication.class, args);
     }
 
 }

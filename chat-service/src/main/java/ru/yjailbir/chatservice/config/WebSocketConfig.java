@@ -1,4 +1,4 @@
-package ru.yjailbir.assistantbackend.config;
+package ru.yjailbir.chatservice.config;
 
 import org.springframework.context.annotation.Configuration;
 import org.springframework.messaging.converter.DefaultContentTypeResolver;
