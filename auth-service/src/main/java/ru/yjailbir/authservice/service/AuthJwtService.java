@@ -14,7 +14,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.Date;
 
 @Component
-public class JwtService {
+public class AuthJwtService {
     @Value("${jwt.token-expiration}")
     private int jwtExpirationMs;
     @Value("${jwt.secret}")
@@ -65,6 +65,7 @@ public class JwtService {
     public String generateJwtToken(UserEntity user) {
         return Jwts.builder()
                 .subject(user.getUsername())
+                .claim("role", user.getRole())
                 .issuedAt(new Date())
                 .expiration(new Date(System.currentTimeMillis() + jwtExpirationMs))
                 .signWith(getSigningKey(), Jwts.SIG.HS512)
@@ -78,5 +79,14 @@ public class JwtService {
                 .parseSignedClaims(token)
                 .getPayload()
                 .getSubject();
+    }
+
+    public String getRoleFromJwtToken(String token) {
+        return Jwts.parser()
+                .verifyWith(getSigningKey())
+                .build()
+                .parseSignedClaims(token)
+                .getPayload()
+                .get("role", String.class);
     }
 }

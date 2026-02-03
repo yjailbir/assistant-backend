@@ -1,5 +1,6 @@
 package ru.yjailbir.chatservice.config;
 
+import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.messaging.converter.DefaultContentTypeResolver;
 import org.springframework.messaging.converter.JacksonJsonMessageConverter;
@@ -14,7 +15,14 @@ import java.util.List;
 
 @Configuration
 @EnableWebSocketMessageBroker
+@RequiredArgsConstructor
 public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
+    private final JwtChannelInterceptor jwtChannelInterceptor;
+
+    /*@Override
+    public void configureClientInboundChannel(ChannelRegistration registration) {
+        registration.interceptors(jwtChannelInterceptor);
+    }*/
 
     @Override
     public void registerStompEndpoints(StompEndpointRegistry registry) {
