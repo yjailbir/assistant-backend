@@ -5,6 +5,7 @@ import org.mindrot.jbcrypt.BCrypt;
 import org.springframework.stereotype.Service;
 import ru.yjailbir.authservice.dto.Role;
 import ru.yjailbir.authservice.dto.request.AuthRequestDto;
+import ru.yjailbir.authservice.dto.response.AuthResponseDto;
 import ru.yjailbir.authservice.entity.UserEntity;
 import ru.yjailbir.authservice.repository.UserRepository;
 
@@ -16,7 +17,7 @@ public class UserService {
 
     public void saveNewUser(AuthRequestDto dto, Role role) {
         if (userRepository.findByUsername(dto.username()).isPresent()) {
-            throw new IllegalArgumentException("Имя пользователя занято!");
+            throw new IllegalArgumentException("User already exists!");
         }
 
         userRepository.save(new UserEntity(
@@ -26,19 +27,25 @@ public class UserService {
         ));
     }
 
-    public String loginUser(AuthRequestDto dto) {
+    public AuthResponseDto loginByRole(AuthRequestDto dto, Role role) {
         UserEntity user = getUserEntityByUsername(dto.username());
 
         if (!verifyPassword(dto.password(), user.getPassword())) {
-            throw new IllegalArgumentException("Неверный пароль!");
+            throw new IllegalArgumentException("Wrong password!");
         }
 
-        return authJwtService.generateJwtToken(user);
+        String token = authJwtService.generateJwtToken(user);
+
+        if (role != user.getRole()) {
+            throw new IllegalArgumentException("Wrong role!");
+        }
+
+        return new AuthResponseDto(token, role);
     }
 
     private UserEntity getUserEntityByUsername(String login) {
         return userRepository.findByUsername(login)
-                .orElseThrow(() -> new IllegalArgumentException("Пользователь не существует!"));
+                .orElseThrow(() -> new IllegalArgumentException("User not found!"));
     }
 
     private String hashPassword(String plainPassword) {
