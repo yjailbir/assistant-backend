@@ -20,10 +20,10 @@ import java.util.List;
 public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
     private final JwtChannelInterceptor jwtChannelInterceptor;
 
-    /*@Override
+    @Override
     public void configureClientInboundChannel(ChannelRegistration registration) {
         registration.interceptors(jwtChannelInterceptor);
-    }*/
+    }
 
     @Override
     public void registerStompEndpoints(StompEndpointRegistry registry) {
