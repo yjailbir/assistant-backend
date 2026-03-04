@@ -6,7 +6,7 @@ services:
       - "8081:8080"
     container_name: auth-service
 
-  chat-service:
+  chat-service-rooms:
     build:
       context: ./chat-service
     ports:
