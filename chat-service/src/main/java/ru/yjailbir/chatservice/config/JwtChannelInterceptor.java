@@ -46,9 +46,7 @@ public class JwtChannelInterceptor implements ChannelInterceptor {
             }
 
             String token = authHeader.substring(7);
-
             Claims claims = chatJwtService.parseToken(token);
-
             String username = claims.getSubject();
             String role = claims.get("role", String.class);
 
@@ -58,7 +56,6 @@ public class JwtChannelInterceptor implements ChannelInterceptor {
 
             List<GrantedAuthority> authorities =
                     List.of(new SimpleGrantedAuthority("ROLE_" + role));
-
             Authentication authentication =
                     new UsernamePasswordAuthenticationToken(
                             username,

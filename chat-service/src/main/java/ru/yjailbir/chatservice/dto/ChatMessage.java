@@ -7,6 +7,7 @@ public record ChatMessage(
         String sessionId,
         String sender,
         String content,
+        MessageType type,
         Instant timestamp
 ) {
 }
