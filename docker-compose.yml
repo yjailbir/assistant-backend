@@ -10,5 +10,5 @@ services:
     build:
       context: ./chat-service
     ports:
-      - "8081:8080"
+      - "8080:8080"
     container_name: chat-service
