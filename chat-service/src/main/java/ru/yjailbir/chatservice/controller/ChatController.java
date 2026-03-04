@@ -25,7 +25,7 @@ public class ChatController {
         messagingTemplate.convertAndSendToUser(
                 username,
                 "/queue/system",
-                "Вы поставлены в очередь"
+                new TextDto("Вы поставлены в очередь")
         );
 
         sessionService.getAvailableExecutors()
@@ -33,16 +33,17 @@ public class ChatController {
                         messagingTemplate.convertAndSendToUser(
                                 executor,
                                 "/queue/incoming",
-                                username
+                                new TextDto(username)
                         )
                 );
     }
 
 
     @MessageMapping("/chat.accept")
-    public void acceptChat(@Payload String userUsername, Principal principal) {
+    public void acceptChat(@Payload TextDto userUsernameDto, Principal principal) {
         String executor = principal.getName();
-        Optional<ChatSession> sessionOpt = sessionService.createSession(userUsername, executor);
+        String username = userUsernameDto.content();
+        Optional<ChatSession> sessionOpt = sessionService.createSession(username, executor);
 
         if (sessionOpt.isEmpty()) return;
 
@@ -60,14 +61,14 @@ public class ChatController {
                 new StartChatResponse(
                         session.getId(),
                         new ChatParticipantDto(
-                                userUsername,
-                                userUsername,
+                                username,
+                                username,
                                 "USER"
                         )
                 );
 
         messagingTemplate.convertAndSendToUser(
-                userUsername,
+                username,
                 "/queue/session",
                 userResponse
         );
@@ -79,7 +80,7 @@ public class ChatController {
     }
 
     @MessageMapping("/chat.send")
-    public void sendMessage(@Payload String content, Principal principal) {
+    public void sendMessage(@Payload TextDto content, Principal principal) {
         String sender = principal.getName();
         Optional<ChatSession> sessionOpt = sessionService.getSessionByUsername(sender);
 
@@ -90,7 +91,7 @@ public class ChatController {
                 UUID.randomUUID().toString(),
                 session.getId(),
                 sender,
-                content,
+                content.content(),
                 MessageType.TEXT,
                 Instant.now()
         );
