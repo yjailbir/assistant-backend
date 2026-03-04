@@ -2,56 +2,62 @@ package ru.yjailbir.chatservice.service;
 
 import org.springframework.stereotype.Service;
 import ru.yjailbir.chatservice.dto.ChatSession;
+import ru.yjailbir.chatservice.dto.ExecutorStatus;
 
-import java.util.Map;
-import java.util.Optional;
-import java.util.UUID;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
 
 @Service
 public class ChatSessionService {
     private final Map<String, ChatSession> sessions = new ConcurrentHashMap<>();
-    private final Map<String, Boolean> executorBusy = new ConcurrentHashMap<>();
+    private final Map<String, ExecutorStatus> executorStatus = new ConcurrentHashMap<>();
     private final Map<String, String> userSessionIndex = new ConcurrentHashMap<>();
     private final Map<String, String> executorSessionIndex = new ConcurrentHashMap<>();
+    private final Queue<String> waitingUsers = new ConcurrentLinkedQueue<>();
 
-    public synchronized Optional<ChatSession> createSession(
-            String user,
-            String executor
-    ) {
+    public void registerExecutor(String username) {
+        executorStatus.put(username, ExecutorStatus.ONLINE);
+    }
 
-        if (userSessionIndex.containsKey(user)) {
+    public void markExecutorBusy(String username) {
+        executorStatus.put(username, ExecutorStatus.BUSY);
+    }
+
+    public void markExecutorOnline(String username) {
+        executorStatus.put(username, ExecutorStatus.ONLINE);
+    }
+
+    public List<String> getAvailableExecutors() {
+        return executorStatus.entrySet().stream()
+                .filter(e -> e.getValue() == ExecutorStatus.ONLINE)
+                .map(Map.Entry::getKey)
+                .toList();
+    }
+
+
+    public void addToQueue(String username) {
+        waitingUsers.add(username);
+    }
+
+
+    public synchronized Optional<ChatSession> createSession(String user, String executor) {
+        if (!waitingUsers.contains(user)) {
             return Optional.empty();
         }
 
+        waitingUsers.remove(user);
         String id = UUID.randomUUID().toString();
         ChatSession session = new ChatSession(id, user, executor);
-
         sessions.put(id, session);
-        executorBusy.put(executor, true);
         userSessionIndex.put(user, id);
         executorSessionIndex.put(executor, id);
+        markExecutorBusy(executor);
 
         return Optional.of(session);
     }
 
-    public Optional<String> findFreeExecutor() {
-        return executorBusy.entrySet().stream()
-                .filter(e -> !e.getValue())
-                .map(Map.Entry::getKey)
-                .findFirst();
-    }
-
-    public void registerExecutor(String username) {
-        executorBusy.putIfAbsent(username, false);
-    }
-
-    public Optional<ChatSession> getSessionById(String id) {
-        return Optional.ofNullable(sessions.get(id));
-    }
-
     public Optional<ChatSession> getSessionByUsername(String username) {
-
         String id = userSessionIndex.get(username);
 
         if (id == null) {
@@ -60,18 +66,17 @@ public class ChatSessionService {
 
         if (id == null) return Optional.empty();
 
-        return getSessionById(id);
+        return Optional.ofNullable(sessions.get(id));
     }
 
-    public synchronized Optional<ChatSession> closeSession(String id) {
+    public synchronized Optional<ChatSession> closeSession(String sessionId) {
+        ChatSession session = sessions.remove(sessionId);
 
-        ChatSession session = sessions.remove(id);
         if (session == null) return Optional.empty();
-
-        executorBusy.put(session.getExecutor(), false);
 
         userSessionIndex.remove(session.getUser());
         executorSessionIndex.remove(session.getExecutor());
+        markExecutorOnline(session.getExecutor());
 
         return Optional.of(session);
     }

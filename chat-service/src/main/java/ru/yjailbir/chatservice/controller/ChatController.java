@@ -1,13 +1,10 @@
 package ru.yjailbir.chatservice.controller;
 
 import lombok.RequiredArgsConstructor;
-import org.springframework.messaging.handler.annotation.MessageMapping;
-import org.springframework.messaging.handler.annotation.Payload;
+import org.springframework.messaging.handler.annotation.*;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Controller;
-import ru.yjailbir.chatservice.dto.ChatMessage;
-import ru.yjailbir.chatservice.dto.ChatSession;
-import ru.yjailbir.chatservice.dto.StartChatResponse;
+import ru.yjailbir.chatservice.dto.*;
 import ru.yjailbir.chatservice.service.ChatSessionService;
 
 import java.security.Principal;
@@ -18,45 +15,66 @@ import java.util.UUID;
 @Controller
 @RequiredArgsConstructor
 public class ChatController {
-
     private final ChatSessionService sessionService;
     private final SimpMessagingTemplate messagingTemplate;
 
-    @MessageMapping("/chat.start")
-    public void startChat(Principal principal) {
+    @MessageMapping("/chat.request")
+    public void requestChat(Principal principal) {
         String username = principal.getName();
-        Optional<String> freeExecutor = sessionService.findFreeExecutor();
-
-        if (freeExecutor.isEmpty()) {
-            messagingTemplate.convertAndSendToUser(
-                    username,
-                    "/queue/errors",
-                    "Нет свободных операторов"
-            );
-            return;
-        }
-
-        String executor = freeExecutor.get();
-        Optional<ChatSession> sessionOpt = sessionService.createSession(username, executor);
-
-        if (sessionOpt.isEmpty()) {
-            return;
-        }
-
-        ChatSession session = sessionOpt.get();
-        StartChatResponse toUserResponse = new StartChatResponse(session.getId(), executor);
-        StartChatResponse toExecutorResponse = new StartChatResponse(session.getId(), username);
-
+        sessionService.addToQueue(username);
         messagingTemplate.convertAndSendToUser(
-                session.getUser(),
-                "/queue/session",
-                toUserResponse
+                username,
+                "/queue/system",
+                "Вы поставлены в очередь"
         );
 
+        sessionService.getAvailableExecutors()
+                .forEach(executor ->
+                        messagingTemplate.convertAndSendToUser(
+                                executor,
+                                "/queue/incoming",
+                                username
+                        )
+                );
+    }
+
+
+    @MessageMapping("/chat.accept")
+    public void acceptChat(@Payload String userUsername, Principal principal) {
+        String executor = principal.getName();
+        Optional<ChatSession> sessionOpt = sessionService.createSession(userUsername, executor);
+
+        if (sessionOpt.isEmpty()) return;
+
+        ChatSession session = sessionOpt.get();
+        StartChatResponse userResponse =
+                new StartChatResponse(
+                        session.getId(),
+                        new ChatParticipantDto(
+                                executor,
+                                executor,
+                                "EXECUTOR"
+                        )
+                );
+        StartChatResponse executorResponse =
+                new StartChatResponse(
+                        session.getId(),
+                        new ChatParticipantDto(
+                                userUsername,
+                                userUsername,
+                                "USER"
+                        )
+                );
+
         messagingTemplate.convertAndSendToUser(
-                session.getExecutor(),
+                userUsername,
                 "/queue/session",
-                toExecutorResponse
+                userResponse
+        );
+        messagingTemplate.convertAndSendToUser(
+                executor,
+                "/queue/session",
+                executorResponse
         );
     }
 
@@ -65,16 +83,15 @@ public class ChatController {
         String sender = principal.getName();
         Optional<ChatSession> sessionOpt = sessionService.getSessionByUsername(sender);
 
-        if (sessionOpt.isEmpty())
-            return;
+        if (sessionOpt.isEmpty()) return;
 
         ChatSession session = sessionOpt.get();
-
         ChatMessage message = new ChatMessage(
                 UUID.randomUUID().toString(),
                 session.getId(),
                 sender,
                 content,
+                MessageType.TEXT,
                 Instant.now()
         );
 
@@ -83,7 +100,6 @@ public class ChatController {
                 "/queue/messages",
                 message
         );
-
         messagingTemplate.convertAndSendToUser(
                 session.getExecutor(),
                 "/queue/messages",
@@ -96,19 +112,21 @@ public class ChatController {
         String username = principal.getName();
         Optional<ChatSession> sessionOpt = sessionService.getSessionByUsername(username);
 
-        if (sessionOpt.isEmpty())
-            return;
+        if (sessionOpt.isEmpty()) return;
 
-        ChatSession session = sessionService.closeSession(sessionOpt.get().getId()).orElse(null);
+        ChatSession session =
+                sessionService.closeSession(
+                        sessionOpt.get().getId()
+                ).orElse(null);
 
-        if (session == null)
-            return;
+        if (session == null) return;
 
         ChatMessage systemMessage = new ChatMessage(
                 UUID.randomUUID().toString(),
                 session.getId(),
                 "SYSTEM",
                 "Сессия завершена",
+                MessageType.SYSTEM,
                 Instant.now()
         );
 
@@ -117,7 +135,6 @@ public class ChatController {
                 "/queue/session-end",
                 systemMessage
         );
-
         messagingTemplate.convertAndSendToUser(
                 session.getExecutor(),
                 "/queue/session-end",
@@ -125,4 +142,3 @@ public class ChatController {
         );
     }
 }
-
