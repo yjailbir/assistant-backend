@@ -19,10 +19,21 @@ import java.util.List;
 @RequiredArgsConstructor
 public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
     private final JwtChannelInterceptor jwtChannelInterceptor;
+    private final StompLoggingInterceptor stompLoggingInterceptor;
 
     @Override
     public void configureClientInboundChannel(ChannelRegistration registration) {
-        registration.interceptors(jwtChannelInterceptor);
+        registration.interceptors(
+                jwtChannelInterceptor,
+                stompLoggingInterceptor
+        );
+    }
+
+    @Override
+    public void configureClientOutboundChannel(ChannelRegistration registration) {
+        registration.interceptors(
+                stompLoggingInterceptor
+        );
     }
 
     @Override
