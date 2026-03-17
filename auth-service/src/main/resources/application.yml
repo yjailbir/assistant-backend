@@ -1,7 +1,21 @@
 spring:
   application:
     name: auth-service
+  datasource:
+    url: jdbc:postgresql://postgres:5432/auth_db
+    username: user
+    password: password
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      initializationFailTimeout: 60000
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: true
+
 
 jwt:
   secret: SEW4ERvIJMnSI$P7,Rh_(WvsvVpkJk[d?pv^=oAV;}f5.@APsHous@Z_ss.h57wZGoR0l:g7u9J1OGD%Sh{vd?
   token-expiration: 43200000
+server:
+  port: 8081
