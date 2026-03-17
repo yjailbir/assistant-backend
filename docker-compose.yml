@@ -12,3 +12,18 @@ services:
     ports:
       - "8080:8080"
     container_name: chat-service
+
+  postgres:
+    image: postgres:18.3-alpine
+    container_name: postgres
+    environment:
+      POSTGRES_DB: auth_db
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:
