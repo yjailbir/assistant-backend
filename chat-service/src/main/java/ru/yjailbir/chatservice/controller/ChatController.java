@@ -21,23 +21,46 @@ public class ChatController {
     @MessageMapping("/chat.request")
     public void requestChat(Principal principal) {
         String username = principal.getName();
-        sessionService.addToQueue(username);
-        messagingTemplate.convertAndSendToUser(
-                username,
-                "/queue/system",
-                new TextDto("Вы поставлены в очередь")
-        );
+        boolean added = sessionService.addToQueue(username);
 
-        sessionService.getAvailableExecutors()
-                .forEach(executor ->
-                        messagingTemplate.convertAndSendToUser(
-                                executor,
-                                "/queue/incoming",
-                                new TextDto(username)
-                        )
-                );
+        if (added) {
+            messagingTemplate.convertAndSendToUser(
+                    username,
+                    "/queue/system",
+                    new TextDto("Вы поставлены в очередь")
+            );
+
+            sessionService.getAvailableExecutors()
+                    .forEach(executor ->
+                            messagingTemplate.convertAndSendToUser(
+                                    executor,
+                                    "/queue/incoming",
+                                    new TextDto(username)
+                            )
+                    );
+        } else {
+            messagingTemplate.convertAndSendToUser(
+                    username,
+                    "/queue/errors",
+                    new TextDto("Вы уже находитесь в очереди или в активном чате")
+            );
+        }
     }
 
+    @MessageMapping("/executor.register")
+    public void registerExecutor(Principal principal) {
+        String executor = principal.getName();
+        sessionService.registerExecutor(executor);
+        String nextUser = sessionService.getNextWaitingUser();
+
+        if (nextUser != null) {
+            messagingTemplate.convertAndSendToUser(
+                    executor,
+                    "/queue/incoming",
+                    new TextDto(nextUser)
+            );
+        }
+    }
 
     @MessageMapping("/chat.accept")
     public void acceptChat(@Payload TextDto userUsernameDto, Principal principal) {
@@ -45,7 +68,14 @@ public class ChatController {
         String username = userUsernameDto.content();
         Optional<ChatSession> sessionOpt = sessionService.createSession(username, executor);
 
-        if (sessionOpt.isEmpty()) return;
+        if (sessionOpt.isEmpty()) {
+            messagingTemplate.convertAndSendToUser(
+                    executor,
+                    "/queue/errors",
+                    new TextDto("Не удалось создать сессию: пользователь больше не в очереди или вы не онлайн")
+            );
+            return;
+        }
 
         ChatSession session = sessionOpt.get();
         StartChatResponse userResponse =
@@ -84,7 +114,14 @@ public class ChatController {
         String sender = principal.getName();
         Optional<ChatSession> sessionOpt = sessionService.getSessionByUsername(sender);
 
-        if (sessionOpt.isEmpty()) return;
+        if (sessionOpt.isEmpty()) {
+            messagingTemplate.convertAndSendToUser(
+                    sender,
+                    "/queue/errors",
+                    new TextDto("Сессия не найдена. Возможно, чат уже завершён.")
+            );
+            return;
+        }
 
         ChatSession session = sessionOpt.get();
         ChatMessage message = new ChatMessage(
@@ -113,7 +150,14 @@ public class ChatController {
         String username = principal.getName();
         Optional<ChatSession> sessionOpt = sessionService.getSessionByUsername(username);
 
-        if (sessionOpt.isEmpty()) return;
+        if (sessionOpt.isEmpty()) {
+            messagingTemplate.convertAndSendToUser(
+                    username,
+                    "/queue/errors",
+                    new TextDto("Сессия не найдена. Возможно, чат уже завершён.")
+            );
+            return;
+        }
 
         ChatSession session =
                 sessionService.closeSession(
