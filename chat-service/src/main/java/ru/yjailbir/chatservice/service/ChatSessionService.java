@@ -15,17 +15,22 @@ public class ChatSessionService {
     private final Map<String, String> userSessionIndex = new ConcurrentHashMap<>();
     private final Map<String, String> executorSessionIndex = new ConcurrentHashMap<>();
     private final Queue<String> waitingUsers = new ConcurrentLinkedQueue<>();
+    private final Set<String> waitingSet = ConcurrentHashMap.newKeySet();
 
-    public void registerExecutor(String username) {
-        executorStatus.put(username, ExecutorStatus.ONLINE);
+    public synchronized void registerExecutor(String username) {
+        executorStatus.putIfAbsent(username, ExecutorStatus.ONLINE);
     }
 
-    public void markExecutorBusy(String username) {
+    public synchronized void markExecutorBusy(String username) {
         executorStatus.put(username, ExecutorStatus.BUSY);
     }
 
-    public void markExecutorOnline(String username) {
+    public synchronized void markExecutorOnline(String username) {
         executorStatus.put(username, ExecutorStatus.ONLINE);
+    }
+
+    public synchronized void markExecutorOffline(String username) {
+        executorStatus.remove(username);
     }
 
     public List<String> getAvailableExecutors() {
@@ -35,18 +40,24 @@ public class ChatSessionService {
                 .toList();
     }
 
+    public synchronized boolean addToQueue(String username) {
+        if (userSessionIndex.containsKey(username) || waitingSet.contains(username)) {
+            return false;
+        }
 
-    public void addToQueue(String username) {
+        waitingSet.add(username);
         waitingUsers.add(username);
+        return true;
     }
 
-
     public synchronized Optional<ChatSession> createSession(String user, String executor) {
-        if (!waitingUsers.contains(user)) {
+        if (!waitingSet.contains(user) || executorStatus.get(executor) != ExecutorStatus.ONLINE) {
             return Optional.empty();
         }
 
+        waitingSet.remove(user);
         waitingUsers.remove(user);
+
         String id = UUID.randomUUID().toString();
         ChatSession session = new ChatSession(id, user, executor);
         sessions.put(id, session);
@@ -60,11 +71,7 @@ public class ChatSessionService {
     public Optional<ChatSession> getSessionByUsername(String username) {
         String id = userSessionIndex.get(username);
 
-        if (id == null) {
-            id = executorSessionIndex.get(username);
-        }
-
-        if (id == null) return Optional.empty();
+        if (id == null) id = executorSessionIndex.get(username);
 
         return Optional.ofNullable(sessions.get(id));
     }
@@ -79,5 +86,20 @@ public class ChatSessionService {
         markExecutorOnline(session.getExecutor());
 
         return Optional.of(session);
+    }
+
+    public synchronized void handleDisconnect(String username) {
+        getSessionByUsername(username).ifPresent(session -> closeSession(session.getId()));
+
+        if (waitingSet.contains(username)) {
+            waitingSet.remove(username);
+            waitingUsers.remove(username);
+        }
+
+        executorStatus.remove(username);
+    }
+
+    public String getNextWaitingUser() {
+        return waitingUsers.peek();
     }
 }
