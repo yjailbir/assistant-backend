@@ -1,6 +1,7 @@
 package ru.yjailbir.chatservice.service;
 
 import org.springframework.stereotype.Service;
+import ru.yjailbir.chatservice.dto.ChatMessage;
 import ru.yjailbir.chatservice.dto.ChatSession;
 import ru.yjailbir.chatservice.dto.ExecutorStatus;
 
@@ -16,6 +17,7 @@ public class ChatSessionService {
     private final Map<String, String> executorSessionIndex = new ConcurrentHashMap<>();
     private final Queue<String> waitingUsers = new ConcurrentLinkedQueue<>();
     private final Set<String> waitingSet = ConcurrentHashMap.newKeySet();
+    private final Map<String, List<ChatMessage>> pendingMessages = new ConcurrentHashMap<>();
 
     public synchronized void registerExecutor(String username) {
         executorStatus.putIfAbsent(username, ExecutorStatus.ONLINE);
@@ -47,6 +49,7 @@ public class ChatSessionService {
 
         waitingSet.add(username);
         waitingUsers.add(username);
+        pendingMessages.put(username, new ArrayList<>());
         return true;
     }
 
@@ -70,9 +73,12 @@ public class ChatSessionService {
 
     public Optional<ChatSession> getSessionByUsername(String username) {
         String id = userSessionIndex.get(username);
-
-        if (id == null) id = executorSessionIndex.get(username);
-
+        if (id == null) {
+            id = executorSessionIndex.get(username);
+        }
+        if (id == null) {
+            return Optional.empty();  // раньше был NPE
+        }
         return Optional.ofNullable(sessions.get(id));
     }
 
@@ -94,6 +100,7 @@ public class ChatSessionService {
         if (waitingSet.contains(username)) {
             waitingSet.remove(username);
             waitingUsers.remove(username);
+            pendingMessages.remove(username);
         }
 
         executorStatus.remove(username);
@@ -101,5 +108,18 @@ public class ChatSessionService {
 
     public String getNextWaitingUser() {
         return waitingUsers.peek();
+    }
+
+    public boolean isUserInQueue(String username) {
+        return waitingSet.contains(username);
+    }
+
+    public void addPendingMessage(String username, ChatMessage message) {
+        pendingMessages.computeIfAbsent(username, k -> new ArrayList<>()).add(message);
+    }
+
+    public List<ChatMessage> getAndClearPendingMessages(String username) {
+        List<ChatMessage> messages = pendingMessages.remove(username);
+        return messages != null ? messages : Collections.emptyList();
     }
 }

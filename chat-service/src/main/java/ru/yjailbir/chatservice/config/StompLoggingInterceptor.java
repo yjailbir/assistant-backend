@@ -7,42 +7,20 @@ import org.springframework.messaging.support.ChannelInterceptor;
 import org.springframework.messaging.support.MessageHeaderAccessor;
 import org.springframework.stereotype.Component;
 
+import java.nio.charset.StandardCharsets;
+
 @Slf4j
 @Component
 public class StompLoggingInterceptor implements ChannelInterceptor {
-
-    @Override
-    public Message<?> preSend(Message<?> message, MessageChannel channel) {
-
-        StompHeaderAccessor accessor =
-                MessageHeaderAccessor.getAccessor(message, StompHeaderAccessor.class);
-
-        if (accessor == null) {
-            return message;
-        }
-
-        StompCommand command = accessor.getCommand();
-
-        if (command != null) {
-
-            Object payload = message.getPayload();
-            String payloadStr;
-
-            if (payload instanceof byte[] bytes) {
-                payloadStr = new String(bytes);
-            } else {
-                payloadStr = String.valueOf(payload);
-            }
-
-            log.info(
-                    "STOMP {} | user={} | dest={} | payload={}",
-                    command,
+    /*@Override
+    public void postSend(Message<?> message, MessageChannel channel, boolean sent) {
+        StompHeaderAccessor accessor = MessageHeaderAccessor.getAccessor(message, StompHeaderAccessor.class);
+        if (accessor != null && accessor.getCommand() != null) {
+            log.info("STOMP {} | user={} | dest={} | payload={}",
+                    accessor.getCommand(),
                     accessor.getUser(),
                     accessor.getDestination(),
-                    payloadStr
-            );
+                    new String((byte[]) message.getPayload(), StandardCharsets.UTF_8));
         }
-
-        return message;
-    }
+    }*/
 }
