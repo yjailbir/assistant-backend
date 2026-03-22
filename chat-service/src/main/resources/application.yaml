@@ -4,3 +4,8 @@ spring:
 
 jwt:
   secret: SEW4ERvIJMnSI$P7,Rh_(WvsvVpkJk[d?pv^=oAV;}f5.@APsHous@Z_ss.h57wZGoR0l:g7u9J1OGD%Sh{vd?
+
+logging:
+  level:
+    org.springframework.web.socket: DEBUG
+    org.springframework.messaging: DEBUG

@@ -9,6 +9,7 @@ import ru.yjailbir.chatservice.service.ChatSessionService;
 
 import java.security.Principal;
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -78,35 +79,32 @@ public class ChatController {
         }
 
         ChatSession session = sessionOpt.get();
-        StartChatResponse userResponse =
-                new StartChatResponse(
-                        session.getId(),
-                        new ChatParticipantDto(
-                                executor,
-                                executor,
-                                "EXECUTOR"
-                        )
-                );
-        StartChatResponse executorResponse =
-                new StartChatResponse(
-                        session.getId(),
-                        new ChatParticipantDto(
-                                username,
-                                username,
-                                "USER"
-                        )
-                );
+        List<ChatMessage> pendingMessages = sessionService.getAndClearPendingMessages(username);
 
-        messagingTemplate.convertAndSendToUser(
-                username,
-                "/queue/session",
-                userResponse
+        StartChatResponse userResponse = new StartChatResponse(
+                session.getId(),
+                new ChatParticipantDto(executor, executor, "EXECUTOR")
         );
-        messagingTemplate.convertAndSendToUser(
-                executor,
-                "/queue/session",
-                executorResponse
+        StartChatResponse executorResponse = new StartChatResponse(
+                session.getId(),
+                new ChatParticipantDto(username, username, "USER")
         );
+
+        messagingTemplate.convertAndSendToUser(username, "/queue/session", userResponse);
+        messagingTemplate.convertAndSendToUser(executor, "/queue/session", executorResponse);
+
+        for (ChatMessage msg : pendingMessages) {
+            ChatMessage finalMessage = new ChatMessage(
+                    msg.id(),
+                    session.getId(),
+                    msg.sender(),
+                    msg.content(),
+                    msg.type(),
+                    msg.timestamp()
+            );
+            messagingTemplate.convertAndSendToUser(username, "/queue/messages", finalMessage);
+            messagingTemplate.convertAndSendToUser(executor, "/queue/messages", finalMessage);
+        }
     }
 
     @MessageMapping("/chat.send")
@@ -115,11 +113,23 @@ public class ChatController {
         Optional<ChatSession> sessionOpt = sessionService.getSessionByUsername(sender);
 
         if (sessionOpt.isEmpty()) {
-            messagingTemplate.convertAndSendToUser(
-                    sender,
-                    "/queue/errors",
-                    new TextDto("Сессия не найдена. Возможно, чат уже завершён.")
-            );
+            if (sessionService.isUserInQueue(sender)) {
+                ChatMessage message = new ChatMessage(
+                        UUID.randomUUID().toString(),
+                        null, // sessionId будет заполнен позже
+                        sender,
+                        content.content(),
+                        MessageType.TEXT,
+                        Instant.now()
+                );
+                sessionService.addPendingMessage(sender, message);
+            } else {
+                messagingTemplate.convertAndSendToUser(
+                        sender,
+                        "/queue/errors",
+                        new TextDto("Сессия не найдена. Возможно, чат уже завершён.")
+                );
+            }
             return;
         }
 
