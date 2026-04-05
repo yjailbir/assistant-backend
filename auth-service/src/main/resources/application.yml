@@ -16,4 +16,4 @@ spring:
 
 jwt:
   secret: SEW4ERvIJMnSI$P7,Rh_(WvsvVpkJk[d?pv^=oAV;}f5.@APsHous@Z_ss.h57wZGoR0l:g7u9J1OGD%Sh{vd?
-  token-expiration: 43200000
+  token-expiration: 31540000000
