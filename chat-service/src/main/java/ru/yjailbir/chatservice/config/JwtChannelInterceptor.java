@@ -21,6 +21,7 @@ import java.util.List;
 @Component
 @RequiredArgsConstructor
 public class JwtChannelInterceptor implements ChannelInterceptor {
+
     private final ChatJwtService chatJwtService;
 
     @Override
@@ -32,14 +33,8 @@ public class JwtChannelInterceptor implements ChannelInterceptor {
                         StompHeaderAccessor.class
                 );
 
-        if (accessor == null) {
-            return message;
-        }
-
-        if (StompCommand.CONNECT.equals(accessor.getCommand())) {
-
-            String authHeader =
-                    accessor.getFirstNativeHeader("Authorization");
+        if (accessor != null && StompCommand.CONNECT.equals(accessor.getCommand())) {
+            String authHeader = accessor.getFirstNativeHeader("Authorization");
 
             if (authHeader == null || !authHeader.startsWith("Bearer ")) {
                 throw new IllegalArgumentException("Нет JWT токена");
@@ -54,20 +49,17 @@ public class JwtChannelInterceptor implements ChannelInterceptor {
                 throw new IllegalArgumentException("Неверный JWT");
             }
 
-            List<GrantedAuthority> authorities =
-                    List.of(new SimpleGrantedAuthority("ROLE_" + role));
-            Authentication authentication =
-                    new UsernamePasswordAuthenticationToken(
-                            username,
-                            null,
-                            authorities
-                    );
+            List<GrantedAuthority> authorities = List.of(new SimpleGrantedAuthority("ROLE_" + role));
+            Authentication authentication = new UsernamePasswordAuthenticationToken(username, null, authorities);
 
             accessor.setUser(authentication);
             SecurityContextHolder.getContext().setAuthentication(authentication);
         }
-
         return message;
     }
-}
 
+    @Override
+    public void afterSendCompletion(Message<?> message, MessageChannel channel, boolean sent, Exception ex) {
+        SecurityContextHolder.clearContext();
+    }
+}
