@@ -25,5 +25,19 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: rabbitmq-stomp
+    ports:
+      - "5672:5672"   # AMQP порт
+      - "15672:15672" # Порт для веб-интерфейса управления
+      - "61613:61613" # STOMP порт
+    environment:
+      - RABBITMQ_DEFAULT_USER=guest
+      - RABBITMQ_DEFAULT_PASS=guest
+    command: >
+      sh -c "rabbitmq-plugins enable --offline rabbitmq_stomp &&
+             rabbitmq-server"
+
 volumes:
   postgres_data:
