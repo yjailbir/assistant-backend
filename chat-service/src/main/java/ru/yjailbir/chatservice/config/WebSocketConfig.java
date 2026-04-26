@@ -51,7 +51,7 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
 
         StompBrokerRelayRegistration relayRegistration = registry
                 .enableStompBrokerRelay("/queue", "/topic")
-                .setRelayHost("localhost")
+                .setRelayHost("rabbitmq")
                 .setRelayPort(61613)
                 .setClientLogin("guest")
                 .setClientPasscode("guest")
