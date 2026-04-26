@@ -57,6 +57,7 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
                 .setClientPasscode("guest")
                 .setSystemLogin("guest")
                 .setSystemPasscode("guest")
+                .setVirtualHost("/")
                 .setUserDestinationBroadcast("/topic/unresolved-user-destination")
                 .setUserRegistryBroadcast("/topic/user-registry");
 
