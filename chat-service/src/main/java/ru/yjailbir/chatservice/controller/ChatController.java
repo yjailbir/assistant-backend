@@ -5,7 +5,9 @@ import org.springframework.messaging.handler.annotation.*;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Controller;
 import ru.yjailbir.chatservice.dto.*;
+import ru.yjailbir.chatservice.entity.ChatMessageDocument;
 import ru.yjailbir.chatservice.service.ChatSessionService;
+import ru.yjailbir.chatservice.service.MessagePersistenceService;
 
 import java.security.Principal;
 import java.time.Instant;
@@ -18,6 +20,7 @@ import java.util.UUID;
 public class ChatController {
     private final ChatSessionService sessionService;
     private final SimpMessagingTemplate messagingTemplate;
+    private final MessagePersistenceService messagePersistenceService;
 
     @MessageMapping("/chat.request")
     public void requestChat(Principal principal) {
@@ -79,7 +82,9 @@ public class ChatController {
         }
 
         ChatSession session = sessionOpt.get();
-        List<ChatMessage> pendingMessages = sessionService.getAndClearPendingMessages(username);
+
+        List<ChatMessageDocument> pendingDocs =
+                messagePersistenceService.assignSessionToPendingMessages(username, session.getId());
 
         StartChatResponse userResponse = new StartChatResponse(
                 session.getId(),
@@ -93,17 +98,10 @@ public class ChatController {
         messagingTemplate.convertAndSendToUser(username, "/queue/session", userResponse);
         messagingTemplate.convertAndSendToUser(executor, "/queue/session", executorResponse);
 
-        for (ChatMessage msg : pendingMessages) {
-            ChatMessage finalMessage = new ChatMessage(
-                    msg.id(),
-                    session.getId(),
-                    msg.sender(),
-                    msg.content(),
-                    msg.type(),
-                    msg.timestamp()
-            );
-            messagingTemplate.convertAndSendToUser(username, "/queue/messages", finalMessage);
-            messagingTemplate.convertAndSendToUser(executor, "/queue/messages", finalMessage);
+        for (ChatMessageDocument doc : pendingDocs) {
+            ChatMessage msg = doc.toChatMessage();
+            messagingTemplate.convertAndSendToUser(username, "/queue/messages", msg);
+            messagingTemplate.convertAndSendToUser(executor, "/queue/messages", msg);
         }
     }
 
@@ -114,15 +112,15 @@ public class ChatController {
 
         if (sessionOpt.isEmpty()) {
             if (sessionService.isUserInQueue(sender)) {
-                ChatMessage message = new ChatMessage(
+                ChatMessageDocument doc = new ChatMessageDocument(
                         UUID.randomUUID().toString(),
-                        null, // sessionId будет заполнен позже
+                        null,
                         sender,
                         content.content(),
                         MessageType.TEXT,
                         Instant.now()
                 );
-                sessionService.addPendingMessage(sender, message);
+                messagePersistenceService.save(doc);
             } else {
                 messagingTemplate.convertAndSendToUser(
                         sender,
@@ -142,6 +140,8 @@ public class ChatController {
                 MessageType.TEXT,
                 Instant.now()
         );
+
+        messagePersistenceService.save(ChatMessageDocument.from(message));
 
         messagingTemplate.convertAndSendToUser(
                 session.getUser(),
@@ -184,6 +184,9 @@ public class ChatController {
                 MessageType.SYSTEM,
                 Instant.now()
         );
+
+        ChatMessageDocument sysDoc = ChatMessageDocument.from(systemMessage);
+        messagePersistenceService.save(sysDoc);
 
         messagingTemplate.convertAndSendToUser(
                 session.getUser(),
