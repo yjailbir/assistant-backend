@@ -12,7 +12,7 @@ import java.nio.charset.StandardCharsets;
 @Slf4j
 @Component
 public class StompLoggingInterceptor implements ChannelInterceptor {
-    /*@Override
+    @Override
     public void postSend(Message<?> message, MessageChannel channel, boolean sent) {
         StompHeaderAccessor accessor = MessageHeaderAccessor.getAccessor(message, StompHeaderAccessor.class);
         if (accessor != null && accessor.getCommand() != null) {
@@ -22,5 +22,5 @@ public class StompLoggingInterceptor implements ChannelInterceptor {
                     accessor.getDestination(),
                     new String((byte[]) message.getPayload(), StandardCharsets.UTF_8));
         }
-    }*/
+    }
 }

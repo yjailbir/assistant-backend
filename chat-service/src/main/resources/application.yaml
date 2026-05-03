@@ -9,5 +9,5 @@ jwt:
 
 logging:
   level:
-    org.springframework.web.socket: DEBUG
-    org.springframework.messaging: DEBUG
+    org.springframework.web.socket: ERROR
+    org.springframework.messaging: ERROR
