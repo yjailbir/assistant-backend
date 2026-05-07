@@ -59,7 +59,9 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
                 .setSystemPasscode("guest")
                 .setVirtualHost("/")
                 .setUserDestinationBroadcast("/topic/unresolved-user-destination")
-                .setUserRegistryBroadcast("/topic/user-registry");
+                .setUserRegistryBroadcast("/topic/user-registry")
+                .setSystemHeartbeatSendInterval(10000)
+                .setSystemHeartbeatReceiveInterval(10000);
 
         relayRegistration.setAutoStartup(true);
     }
