@@ -12,7 +12,6 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
-import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
 import ru.yjailbir.chatservice.service.ChatJwtService;
 
@@ -21,45 +20,34 @@ import java.util.List;
 @Component
 @RequiredArgsConstructor
 public class JwtChannelInterceptor implements ChannelInterceptor {
-
     private final ChatJwtService chatJwtService;
 
     @Override
     public Message<?> preSend(Message<?> message, MessageChannel channel) {
-
-        StompHeaderAccessor accessor =
-                MessageHeaderAccessor.getAccessor(
-                        message,
-                        StompHeaderAccessor.class
-                );
+        StompHeaderAccessor accessor = MessageHeaderAccessor.getAccessor(message, StompHeaderAccessor.class);
 
         if (accessor != null && StompCommand.CONNECT.equals(accessor.getCommand())) {
-            String authHeader = accessor.getFirstNativeHeader("Authorization");
+            // If Principal has already been set during handshake, skip authentication
+            if (accessor.getUser() == null) {
+                String authHeader = accessor.getFirstNativeHeader("Authorization");
+                if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+                    throw new IllegalArgumentException("Нет JWT токена");
+                }
 
-            if (authHeader == null || !authHeader.startsWith("Bearer ")) {
-                throw new IllegalArgumentException("Нет JWT токена");
+                String token = authHeader.substring(7);
+                Claims claims = chatJwtService.parseToken(token);
+                String username = claims.getSubject();
+                String role = claims.get("role", String.class);
+
+                if (username == null) {
+                    throw new IllegalArgumentException("Неверный JWT");
+                }
+
+                List<GrantedAuthority> authorities = List.of(new SimpleGrantedAuthority("ROLE_" + role));
+                Authentication authentication = new UsernamePasswordAuthenticationToken(username, null, authorities);
+                accessor.setUser(authentication);
             }
-
-            String token = authHeader.substring(7);
-            Claims claims = chatJwtService.parseToken(token);
-            String username = claims.getSubject();
-            String role = claims.get("role", String.class);
-
-            if (username == null) {
-                throw new IllegalArgumentException("Неверный JWT");
-            }
-
-            List<GrantedAuthority> authorities = List.of(new SimpleGrantedAuthority("ROLE_" + role));
-            Authentication authentication = new UsernamePasswordAuthenticationToken(username, null, authorities);
-
-            accessor.setUser(authentication);
-            SecurityContextHolder.getContext().setAuthentication(authentication);
         }
         return message;
-    }
-
-    @Override
-    public void afterSendCompletion(Message<?> message, MessageChannel channel, boolean sent, Exception ex) {
-        SecurityContextHolder.clearContext();
     }
 }

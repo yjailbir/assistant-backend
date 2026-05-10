@@ -6,6 +6,7 @@ import ru.yjailbir.chatservice.entity.ChatMessageDocument;
 import ru.yjailbir.chatservice.repository.ChatMessageRepository;
 
 import java.util.List;
+import java.util.Optional;
 
 @Service
 @RequiredArgsConstructor
@@ -18,15 +19,12 @@ public class MessagePersistenceService {
 
     public List<ChatMessageDocument> assignSessionToPendingMessages(String username, String sessionId) {
         List<ChatMessageDocument> pending = messageRepository.findBySenderAndSessionIdIsNull(username);
-
         for (ChatMessageDocument doc : pending) {
             doc.setSessionId(sessionId);
         }
-
         if (!pending.isEmpty()) {
             messageRepository.saveAll(pending);
         }
-
         return pending;
     }
 
@@ -34,12 +32,14 @@ public class MessagePersistenceService {
         return messageRepository.findBySessionIdOrderByTimestampAsc(sessionId);
     }
 
-
     public void deletePendingMessages(String username) {
         List<ChatMessageDocument> pending = messageRepository.findBySenderAndSessionIdIsNull(username);
-
         if (!pending.isEmpty()) {
             messageRepository.deleteAll(pending);
         }
+    }
+
+    public Optional<ChatMessageDocument> getLastMessage(String sessionId) {
+        return messageRepository.findFirstBySessionIdOrderByTimestampDesc(sessionId);
     }
 }

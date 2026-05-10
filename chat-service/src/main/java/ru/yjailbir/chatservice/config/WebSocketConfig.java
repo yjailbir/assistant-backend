@@ -7,7 +7,6 @@ import org.springframework.messaging.converter.JacksonJsonMessageConverter;
 import org.springframework.messaging.converter.MessageConverter;
 import org.springframework.messaging.simp.config.ChannelRegistration;
 import org.springframework.messaging.simp.config.MessageBrokerRegistry;
-import org.springframework.messaging.simp.config.StompBrokerRelayRegistration;
 import org.springframework.util.MimeTypeUtils;
 import org.springframework.web.socket.config.annotation.EnableWebSocketMessageBroker;
 import org.springframework.web.socket.config.annotation.StompEndpointRegistry;
@@ -22,26 +21,23 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
     private final JwtChannelInterceptor jwtChannelInterceptor;
     private final StompLoggingInterceptor stompLoggingInterceptor;
     private final PrincipalHandshakeHandler principalHandshakeHandler;
+    private final AuthHandshakeInterceptor authHandshakeInterceptor;
 
     @Override
     public void configureClientInboundChannel(ChannelRegistration registration) {
-        registration.interceptors(
-                jwtChannelInterceptor,
-                stompLoggingInterceptor
-        );
+        registration.interceptors(jwtChannelInterceptor, stompLoggingInterceptor);
     }
 
     @Override
     public void configureClientOutboundChannel(ChannelRegistration registration) {
-        registration.interceptors(
-                stompLoggingInterceptor
-        );
+        registration.interceptors(stompLoggingInterceptor);
     }
 
     @Override
     public void registerStompEndpoints(StompEndpointRegistry registry) {
         registry.addEndpoint("/ws")
                 .setAllowedOriginPatterns("*")
+                .addInterceptors(authHandshakeInterceptor)
                 .setHandshakeHandler(principalHandshakeHandler);
     }
 
@@ -49,8 +45,7 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
     public void configureMessageBroker(MessageBrokerRegistry registry) {
         registry.setApplicationDestinationPrefixes("/app");
 
-        StompBrokerRelayRegistration relayRegistration = registry
-                .enableStompBrokerRelay("/queue", "/topic")
+        registry.enableStompBrokerRelay("/queue", "/topic")
                 .setRelayHost("rabbitmq")
                 .setRelayPort(61613)
                 .setClientLogin("guest")
@@ -61,9 +56,8 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
                 .setUserDestinationBroadcast("/topic/unresolved-user-destination")
                 .setUserRegistryBroadcast("/topic/user-registry")
                 .setSystemHeartbeatSendInterval(10000)
-                .setSystemHeartbeatReceiveInterval(10000);
-
-        relayRegistration.setAutoStartup(true);
+                .setSystemHeartbeatReceiveInterval(10000)
+                .setAutoStartup(true);
     }
 
     @Override
