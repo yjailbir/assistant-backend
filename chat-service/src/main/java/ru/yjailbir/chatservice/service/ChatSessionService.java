@@ -11,6 +11,7 @@ import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
 @Service
@@ -20,19 +21,57 @@ public class ChatSessionService {
     private final ChatSessionRepository sessionRepository;
     private final MessagePersistenceService messagePersistenceService;
 
-    // In‑memory cache for active sessions
+    // Кэш активных сессий (id -> сессия)
     private final Map<String, ChatSessionDocument> activeSessions = new ConcurrentHashMap<>();
-    // Fast look‑up: participant username → active session id
+    // Быстрый поиск: username -> id активной сессии (если есть)
     private final Map<String, String> usernameToActiveSessionId = new ConcurrentHashMap<>();
-
-    // Executor online/busy state (not persisted)
+    // Статусы операторов (ONLINE/BUSY)
     private final Map<String, ExecutorStatus> executorStatus = new ConcurrentHashMap<>();
-
-    // Waiting queue for users (not persisted)
+    // Очередь ожидающих клиентов
     private final Queue<String> waitingUsers = new ConcurrentLinkedQueue<>();
     private final Set<String> waitingSet = ConcurrentHashMap.newKeySet();
+    // ======== Подсчёт активных WebSocket-подключений ========
+    private final Map<String, AtomicInteger> connectionCounters = new ConcurrentHashMap<>();
 
-    // ---------- Executor management ----------
+    /**
+     * Вызывается при CONNECT (SessionConnectEvent)
+     */
+    public void userConnected(String username) {
+        connectionCounters.computeIfAbsent(username, k -> new AtomicInteger(0)).incrementAndGet();
+    }
+
+    /**
+     * Вызывается при DISCONNECT (SessionDisconnectEvent)
+     *
+     * @return true, если это было последнее подключение пользователя
+     */
+    public boolean userDisconnected(String username) {
+        AtomicInteger counter = connectionCounters.get(username);
+        if (counter != null && counter.decrementAndGet() == 0) {
+            connectionCounters.remove(username);
+            return true; // больше нет активных подключений
+        }
+        return false;
+    }
+
+    /**
+     * Действия, выполняемые только когда ВСЕ подключения пользователя закрыты.
+     * НЕ закрывает чат-сессию.
+     */
+    public void handleFullDisconnect(String username) {
+        // Убираем из очереди, если клиент был там
+        if (waitingSet.contains(username)) {
+            waitingSet.remove(username);
+            waitingUsers.remove(username);
+            messagePersistenceService.deletePendingMessages(username);
+        }
+        // Если это был оператор – снимаем онлайн-статус
+        if (executorStatus.containsKey(username)) {
+            markExecutorOffline(username);
+        }
+    }
+
+    // ======== Управление операторами ========
     public synchronized void registerExecutor(String username) {
         executorStatus.putIfAbsent(username, ExecutorStatus.ONLINE);
     }
@@ -56,7 +95,7 @@ public class ChatSessionService {
                 .collect(Collectors.toList());
     }
 
-    // ---------- Queue management ----------
+    // ======== Очередь ========
     public synchronized boolean addToQueue(String username) {
         if (getActiveSessionByUsername(username).isPresent() || waitingSet.contains(username)) {
             return false;
@@ -74,18 +113,15 @@ public class ChatSessionService {
         return waitingSet.contains(username);
     }
 
-    // ---------- Session lifecycle ----------
+    // ======== Жизненный цикл сессии ========
     public synchronized Optional<ChatSessionDocument> createSession(String user, String executor) {
-        // Validate prerequisites
         if (!waitingSet.contains(user) || executorStatus.get(executor) != ExecutorStatus.ONLINE) {
             return Optional.empty();
         }
 
-        // Remove user from queue
         waitingSet.remove(user);
         waitingUsers.remove(user);
 
-        // Create and persist session
         String id = UUID.randomUUID().toString();
         ChatSessionDocument session = ChatSessionDocument.builder()
                 .id(id)
@@ -96,7 +132,6 @@ public class ChatSessionService {
                 .build();
         sessionRepository.save(session);
 
-        // Update in‑memory state
         activeSessions.put(id, session);
         usernameToActiveSessionId.put(user, id);
         usernameToActiveSessionId.put(executor, id);
@@ -117,12 +152,10 @@ public class ChatSessionService {
         session.setStatus(SessionStatus.CLOSED);
         sessionRepository.save(session);
 
-        // Remove from active cache
         activeSessions.remove(session.getId());
         usernameToActiveSessionId.remove(session.getUserId());
         usernameToActiveSessionId.remove(session.getExecutorId());
 
-        // Free up executor if they were busy
         if (executorStatus.get(session.getExecutorId()) == ExecutorStatus.BUSY) {
             markExecutorOnline(session.getExecutorId());
         }
@@ -131,21 +164,16 @@ public class ChatSessionService {
     }
 
     /**
-     * Find active session by any participant's username, first in cache, then in DB.
+     * Найти активную сессию по участнику (сначала в кэше, потом в БД)
      */
     public Optional<ChatSessionDocument> getActiveSessionByUsername(String username) {
-        // Fast path: check in‑memory index
         String sessionId = usernameToActiveSessionId.get(username);
         if (sessionId != null) {
             ChatSessionDocument session = activeSessions.get(sessionId);
-            if (session != null) {
-                return Optional.of(session);
-            }
-            // Index stale – clean it
+            if (session != null) return Optional.of(session);
             usernameToActiveSessionId.remove(username);
         }
 
-        // Slow path: ask DB for an OPEN session
         Optional<ChatSessionDocument> sessionOpt = sessionRepository.findOpenSessionByParticipant(username);
         sessionOpt.ifPresent(session -> {
             activeSessions.putIfAbsent(session.getId(), session);
@@ -155,38 +183,13 @@ public class ChatSessionService {
         return sessionOpt;
     }
 
-    /**
-     * Get a session by its ID, regardless of status (for reconnect / history).
-     */
     public Optional<ChatSessionDocument> getSessionById(String sessionId) {
         ChatSessionDocument session = activeSessions.get(sessionId);
         if (session != null) return Optional.of(session);
         return sessionRepository.findById(sessionId);
     }
 
-    /**
-     * Get all OPEN sessions for a given participant (used by chat list REST).
-     */
     public List<ChatSessionDocument> getOpenSessionsForUser(String username) {
         return sessionRepository.findByParticipantAndStatus(username, username, SessionStatus.OPEN);
-    }
-
-    // ---------- Disconnect handling ----------
-    public synchronized void handleDisconnect(String username) {
-        // If the user was in the waiting queue, remove them and clear pending messages
-        if (waitingSet.contains(username)) {
-            waitingSet.remove(username);
-            waitingUsers.remove(username);
-            messagePersistenceService.deletePendingMessages(username);
-        }
-
-        // If an executor disconnects, mark them offline (they won't receive new incoming requests)
-        if (executorStatus.containsKey(username)) {
-            markExecutorOffline(username);
-        }
-
-        // Important: we do NOT close any active chat session here.
-        // The session remains open, so the other participant is not affected,
-        // and the disconnected user can reconnect later and resume the conversation.
     }
 }
