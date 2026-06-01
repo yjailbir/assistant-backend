@@ -6,15 +6,35 @@ spring:
       server:
         webmvc:
           routes:
-            - id: auth-service
+            - id: auth-service-rest
               uri: http://auth-service:8080
               predicates:
                 - Path=/auth/api/**
+              filters:
+                - StripPrefix=1
             - id: chat-service-rest
               uri: http://chat-service:8080
               predicates:
                 - Path=/chat/api/**
+              filters:
+                - StripPrefix=1
             - id: chat-service-websocket
               uri: http://chat-service:8080
               predicates:
                 - Path=/ws/**
+            - id: auth-service-docs
+              uri: http://auth-service:8080
+              predicates:
+                - Path=/v3/api-docs/auth
+            - id: chat-service-docs
+              uri: http://chat-service:8080
+              predicates:
+                - Path=/v3/api-docs/chat
+
+springdoc:
+  swagger-ui:
+    urls:
+      - name: auth-service
+        url: /v3/api-docs/auth
+      - name: chat-service
+        url: /v3/api-docs/chat

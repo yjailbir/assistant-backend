@@ -1,7 +1,7 @@
 services:
   gateway-service:
     build:
-      context: ./gateway-service
+      context: ./gateway
     ports:
       - "8080:8080"
     container_name: gateway-service

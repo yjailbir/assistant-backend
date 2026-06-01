@@ -13,6 +13,9 @@ spring:
       ddl-auto: update
     show-sql: true
 
+springdoc:
+  api-docs:
+    path: /v3/api-docs/auth
 
 jwt:
   secret: SEW4ERvIJMnSI$P7,Rh_(WvsvVpkJk[d?pv^=oAV;}f5.@APsHous@Z_ss.h57wZGoR0l:g7u9J1OGD%Sh{vd?
