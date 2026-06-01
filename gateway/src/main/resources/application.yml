@@ -1,0 +1,20 @@
+spring:
+  application:
+    name: gateway
+  cloud:
+    gateway:
+      server:
+        webmvc:
+          routes:
+            - id: auth-service
+              uri: http://auth-service:8080
+              predicates:
+                - Path=/auth/api/**
+            - id: chat-service-rest
+              uri: http://chat-service:8080
+              predicates:
+                - Path=/chat/api/**
+            - id: chat-service-websocket
+              uri: http://chat-service:8080
+              predicates:
+                - Path=/ws/**

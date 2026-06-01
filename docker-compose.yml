@@ -1,16 +1,22 @@
 services:
+  gateway-service:
+    build:
+      context: ./gateway-service
+    ports:
+      - "8080:8080"
+    container_name: gateway-service
+    depends_on:
+      - auth-service
+      - chat-service
+
   auth-service:
     build:
       context: ./auth-service
-    ports:
-      - "8081:8080"
     container_name: auth-service
 
   chat-service:
     build:
       context: ./chat-service
-    ports:
-      - "8080:8080"
     container_name: chat-service
 
   postgres:
@@ -20,8 +26,6 @@ services:
       POSTGRES_DB: auth_db
       POSTGRES_USER: user
       POSTGRES_PASSWORD: password
-    ports:
-      - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql
 
@@ -29,9 +33,7 @@ services:
     image: rabbitmq:3-management
     container_name: rabbitmq-stomp
     ports:
-      - "5672:5672"   # AMQP порт
       - "15672:15672" # Порт для веб-интерфейса управления
-      - "61613:61613" # STOMP порт
     environment:
       - RABBITMQ_DEFAULT_USER=guest
       - RABBITMQ_DEFAULT_PASS=guest
@@ -42,8 +44,6 @@ services:
   mongodb:
     image: mongo:7
     container_name: mongodb
-    ports:
-      - "27017:27017"
     volumes:
       - mongo_data:/data/db
 
