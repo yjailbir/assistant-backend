@@ -19,7 +19,7 @@ spring:
               filters:
                 - StripPrefix=1
             - id: chat-service-websocket
-              uri: http://chat-service:8080
+              uri: ws://chat-service:8080
               predicates:
                 - Path=/ws/**
             - id: auth-service-docs

@@ -28,19 +28,17 @@ public class AuthHandshakeInterceptor implements HandshakeInterceptor {
             WebSocketHandler wsHandler, Map<String, Object> attributes
     ) {
         if (request instanceof ServletServerHttpRequest servletRequest) {
-            String token = servletRequest.getServletRequest().getParameter("token");
-            if (token != null) {
-                try {
-                    Claims claims = chatJwtService.parseToken(token);
-                    String username = claims.getSubject();
-                    String role = claims.get("role", String.class);
-                    List<GrantedAuthority> authorities = List.of(new SimpleGrantedAuthority("ROLE_" + role));
-                    Authentication auth = new UsernamePasswordAuthenticationToken(username, null, authorities);
-                    attributes.put("principal", auth);
-                    return true;
-                } catch (Exception e) {
-                    return false;
-                }
+            String token = servletRequest.getServletRequest().getHeader("Authorization").replace("Bearer ", "");
+            try {
+                Claims claims = chatJwtService.parseToken(token);
+                String username = claims.getSubject();
+                String role = claims.get("role", String.class);
+                List<GrantedAuthority> authorities = List.of(new SimpleGrantedAuthority("ROLE_" + role));
+                Authentication auth = new UsernamePasswordAuthenticationToken(username, null, authorities);
+                attributes.put("principal", auth);
+                return true;
+            } catch (Exception e) {
+                return false;
             }
         }
         return false;
