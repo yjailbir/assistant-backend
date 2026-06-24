@@ -1,12 +1,15 @@
 package ru.yjailbir.chatservice.config;
 
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.messaging.converter.DefaultContentTypeResolver;
 import org.springframework.messaging.converter.JacksonJsonMessageConverter;
 import org.springframework.messaging.converter.MessageConverter;
 import org.springframework.messaging.simp.config.ChannelRegistration;
 import org.springframework.messaging.simp.config.MessageBrokerRegistry;
+import org.springframework.scheduling.TaskScheduler;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import org.springframework.util.MimeTypeUtils;
 import org.springframework.web.socket.config.annotation.EnableWebSocketMessageBroker;
 import org.springframework.web.socket.config.annotation.StompEndpointRegistry;
@@ -57,7 +60,8 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
                 .setUserRegistryBroadcast("/topic/user-registry")
                 .setSystemHeartbeatSendInterval(5000)
                 .setSystemHeartbeatReceiveInterval(5000)
-                .setAutoStartup(true);
+                .setAutoStartup(true)
+                .setTaskScheduler(clientHeartbeatScheduler());
     }
 
     @Override
@@ -68,5 +72,14 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
         converter.setContentTypeResolver(resolver);
         messageConverters.add(converter);
         return false;
+    }
+
+    @Bean
+    public TaskScheduler clientHeartbeatScheduler() {
+        ThreadPoolTaskScheduler scheduler = new ThreadPoolTaskScheduler();
+        scheduler.setPoolSize(1);
+        scheduler.setThreadNamePrefix("ws-heartbeat-");
+        scheduler.initialize();
+        return scheduler;
     }
 }
