@@ -52,7 +52,7 @@ public class ChatStompController {
                     new TextDto(nextUser));
         }
     }
-
+///todo сделать так чтобы айди сессии присваивался сразу и тогда висячие сообщения будут искаться по наличию а не его отсутстсвию
     @MessageMapping("/chat.accept")
     public void acceptChat(@Payload TextDto userUsernameDto, Principal principal) {
         String executor = principal.getName();
