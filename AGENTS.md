@@ -67,18 +67,6 @@ docker compose up --build
 
 ## Проверки перед завершением задачи
 
-Если менялся код конкретного Maven-модуля, проверяй этот модуль:
-
-```bash
-./mvnw -pl <module-name> test
-```
-
-На Windows можно использовать:
-
-```bash
-mvnw.cmd -pl <module-name> test
-```
-
 Если изменение затрагивает Dockerfile, `docker-compose.yml`, маршрутизацию
 gateway или межсервисные настройки, можно запускать Docker-команды для проверки.
 
