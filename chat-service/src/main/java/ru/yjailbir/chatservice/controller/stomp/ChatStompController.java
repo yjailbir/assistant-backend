@@ -24,14 +24,17 @@ public class ChatStompController {
     private final SimpMessagingTemplate messagingTemplate;
     private final MessagePersistenceService messagePersistenceService;
 
+    private void sendSystemNotification(String username, String content) {
+        messagingTemplate.convertAndSendToUser(username, "/queue/system", new TextDto(content));
+    }
+
     @MessageMapping("/chat.request")
     public void requestChat(Principal principal) {
         String username = principal.getName();
         boolean added = sessionService.addToQueue(username);
 
         if (added) {
-            messagingTemplate.convertAndSendToUser(username, "/queue/system",
-                    new TextDto("Вы поставлены в очередь"));
+            sendSystemNotification(username, "Вы поставлены в очередь");
             sessionService.getAvailableExecutors().forEach(executor ->
                     messagingTemplate.convertAndSendToUser(executor, "/queue/incoming",
                             new TextDto(username))
@@ -77,6 +80,8 @@ public class ChatStompController {
 
         messagingTemplate.convertAndSendToUser(username, "/queue/session", userResponse);
         messagingTemplate.convertAndSendToUser(executor, "/queue/session", executorResponse);
+        sendSystemNotification(username, "Чат создан");
+        sendSystemNotification(executor, "Чат создан");
 
         for (ChatMessageDocument doc : pendingDocs) {
             ChatMessage msg = doc.toChatMessage();
