@@ -12,7 +12,6 @@ import ru.yjailbir.chatservice.service.MessagePersistenceService;
 
 import java.security.Principal;
 import java.time.Instant;
-import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -70,8 +69,7 @@ public class ChatStompController {
 
         ChatSessionDocument session = sessionOpt.get();
 
-        List<ChatMessageDocument> pendingDocs =
-                messagePersistenceService.assignSessionToPendingMessages(username, session.getId());
+        messagePersistenceService.assignSessionToPendingMessages(username, session.getId());
 
         StartChatResponse userResponse = new StartChatResponse(session.getId(),
                 new ChatParticipantDto(executor, executor, "EXECUTOR"));
@@ -83,11 +81,6 @@ public class ChatStompController {
         sendSystemNotification(username, "Чат создан");
         sendSystemNotification(executor, "Чат создан");
 
-        for (ChatMessageDocument doc : pendingDocs) {
-            ChatMessage msg = doc.toChatMessage();
-            messagingTemplate.convertAndSendToUser(username, "/queue/messages", msg);
-            messagingTemplate.convertAndSendToUser(executor, "/queue/messages", msg);
-        }
     }
 
     @MessageMapping("/chat.reconnect")
@@ -118,12 +111,6 @@ public class ChatStompController {
 
         StartChatResponse response = new StartChatResponse(session.getId(), participant);
         messagingTemplate.convertAndSendToUser(username, "/queue/session", response);
-
-        // Send full history
-        List<ChatMessageDocument> history = messagePersistenceService.getHistory(session.getId());
-        for (ChatMessageDocument doc : history) {
-            messagingTemplate.convertAndSendToUser(username, "/queue/messages", doc.toChatMessage());
-        }
     }
 
     @MessageMapping("/chat.send")
