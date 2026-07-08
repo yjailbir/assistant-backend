@@ -146,9 +146,12 @@ public class ChatStompController {
 
         messagePersistenceService.save(ChatMessageDocument.from(message));
 
-        messagingTemplate.convertAndSendToUser(session.getUserId(), "/queue/messages", message);
-        if (session.getExecutorId() != null) {
-            messagingTemplate.convertAndSendToUser(session.getExecutorId(), "/queue/messages", message);
+        if (sender.equals(session.getUserId())) {
+            if (session.getExecutorId() != null) {
+                messagingTemplate.convertAndSendToUser(session.getExecutorId(), "/queue/messages", message);
+            }
+        } else {
+            messagingTemplate.convertAndSendToUser(session.getUserId(), "/queue/messages", message);
         }
     }
 
