@@ -30,9 +30,12 @@ public class ChatStompController {
     @MessageMapping("/chat.request")
     public void requestChat(Principal principal) {
         String username = principal.getName();
-        boolean added = sessionService.addToQueue(username);
+        Optional<ChatSessionDocument> sessionOpt = sessionService.requestChat(username);
 
-        if (added) {
+        if (sessionOpt.isPresent()) {
+            ChatSessionDocument session = sessionOpt.get();
+            messagingTemplate.convertAndSendToUser(username, "/queue/session",
+                    new StartChatResponse(session.getId(), session.getStatus(), null));
             sendSystemNotification(username, "Вы поставлены в очередь");
             sessionService.getAvailableExecutors().forEach(executor ->
                     messagingTemplate.convertAndSendToUser(executor, "/queue/incoming",
@@ -54,7 +57,6 @@ public class ChatStompController {
                     new TextDto(nextUser));
         }
     }
-///todo сделать так чтобы айди сессии присваивался сразу и тогда висячие сообщения будут искаться по наличию а не его отсутстсвию
     @MessageMapping("/chat.accept")
     public void acceptChat(@Payload TextDto userUsernameDto, Principal principal) {
         String executor = principal.getName();
@@ -71,9 +73,9 @@ public class ChatStompController {
 
         messagePersistenceService.assignSessionToPendingMessages(username, session.getId());
 
-        StartChatResponse userResponse = new StartChatResponse(session.getId(),
+        StartChatResponse userResponse = new StartChatResponse(session.getId(), session.getStatus(),
                 new ChatParticipantDto(executor, executor, "EXECUTOR"));
-        StartChatResponse executorResponse = new StartChatResponse(session.getId(),
+        StartChatResponse executorResponse = new StartChatResponse(session.getId(), session.getStatus(),
                 new ChatParticipantDto(username, username, "USER"));
 
         messagingTemplate.convertAndSendToUser(username, "/queue/session", userResponse);
@@ -95,7 +97,7 @@ public class ChatStompController {
         }
 
         ChatSessionDocument session = sessionOpt.get();
-        if (!session.getUserId().equals(username) && !session.getExecutorId().equals(username)) {
+        if (!session.getUserId().equals(username) && !username.equals(session.getExecutorId())) {
             messagingTemplate.convertAndSendToUser(username, "/queue/errors",
                     new TextDto("Вы не участник этой сессии"));
             return;
@@ -104,12 +106,14 @@ public class ChatStompController {
         // Send session metadata
         ChatParticipantDto participant;
         if (session.getUserId().equals(username)) {
-            participant = new ChatParticipantDto(session.getExecutorId(), session.getExecutorId(), "EXECUTOR");
+            participant = session.getExecutorId() == null
+                    ? null
+                    : new ChatParticipantDto(session.getExecutorId(), session.getExecutorId(), "EXECUTOR");
         } else {
             participant = new ChatParticipantDto(session.getUserId(), session.getUserId(), "USER");
         }
 
-        StartChatResponse response = new StartChatResponse(session.getId(), participant);
+        StartChatResponse response = new StartChatResponse(session.getId(), session.getStatus(), participant);
         messagingTemplate.convertAndSendToUser(username, "/queue/session", response);
     }
 
@@ -119,25 +123,13 @@ public class ChatStompController {
         Optional<ChatSessionDocument> sessionOpt = sessionService.getActiveSessionByUsername(sender);
 
         if (sessionOpt.isEmpty()) {
-            if (sessionService.isUserInQueue(sender)) {
-                ChatMessageDocument doc = new ChatMessageDocument(
-                        UUID.randomUUID().toString(),
-                        null,
-                        sender,
-                        content.content(),
-                        MessageType.TEXT,
-                        Instant.now()
-                );
-                messagePersistenceService.save(doc);
-            } else {
-                messagingTemplate.convertAndSendToUser(sender, "/queue/errors",
-                        new TextDto("Сессия не найдена. Возможно, чат уже завершён."));
-            }
+            messagingTemplate.convertAndSendToUser(sender, "/queue/errors",
+                    new TextDto("Сессия не найдена. Возможно, чат уже завершён."));
             return;
         }
 
         ChatSessionDocument session = sessionOpt.get();
-        if (session.getStatus() != SessionStatus.OPEN) {
+        if (session.getStatus() == SessionStatus.CLOSED) {
             messagingTemplate.convertAndSendToUser(sender, "/queue/errors",
                     new TextDto("Сессия завершена, отправка невозможна"));
             return;
@@ -155,7 +147,9 @@ public class ChatStompController {
         messagePersistenceService.save(ChatMessageDocument.from(message));
 
         messagingTemplate.convertAndSendToUser(session.getUserId(), "/queue/messages", message);
-        messagingTemplate.convertAndSendToUser(session.getExecutorId(), "/queue/messages", message);
+        if (session.getExecutorId() != null) {
+            messagingTemplate.convertAndSendToUser(session.getExecutorId(), "/queue/messages", message);
+        }
     }
 
     @MessageMapping("/chat.end")
@@ -183,6 +177,8 @@ public class ChatStompController {
         messagePersistenceService.save(ChatMessageDocument.from(systemMessage));
 
         messagingTemplate.convertAndSendToUser(session.getUserId(), "/queue/session-end", systemMessage);
-        messagingTemplate.convertAndSendToUser(session.getExecutorId(), "/queue/session-end", systemMessage);
+        if (session.getExecutorId() != null) {
+            messagingTemplate.convertAndSendToUser(session.getExecutorId(), "/queue/session-end", systemMessage);
+        }
     }
 }

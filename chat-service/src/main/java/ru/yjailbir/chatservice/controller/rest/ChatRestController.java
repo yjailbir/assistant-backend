@@ -16,6 +16,7 @@ import ru.yjailbir.chatservice.service.MessagePersistenceService;
 import java.security.Principal;
 import java.time.Instant;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
@@ -29,7 +30,7 @@ public class ChatRestController {
     @GetMapping("/chats")
     public ResponseEntity<List<ChatSummaryDto>> getChats(Principal principal) {
         String username = principal.getName();
-        List<ChatSessionDocument> sessions = sessionService.getOpenSessionsForUser(username);
+        List<ChatSessionDocument> sessions = sessionService.getActiveSessionsForUser(username);
 
         List<ChatSummaryDto> summaries = sessions.stream()
                 .map(session -> {
@@ -51,6 +52,7 @@ public class ChatRestController {
 
                     return new ChatSummaryDto(
                             session.getId(),
+                            session.getStatus(),
                             participant,
                             lastContent,
                             lastTimestamp,
@@ -69,7 +71,7 @@ public class ChatRestController {
         Optional<ChatSessionDocument> sessionOpt = sessionService.getSessionById(sessionId);
 
         if (sessionOpt.isEmpty() ||
-                (!sessionOpt.get().getUserId().equals(username) && !sessionOpt.get().getExecutorId().equals(username))) {
+                (!sessionOpt.get().getUserId().equals(username) && !Objects.equals(sessionOpt.get().getExecutorId(), username))) {
             return ResponseEntity.notFound().build();
         }
 

@@ -4,6 +4,7 @@ import java.time.Instant;
 
 public record ChatSummaryDto(
         String sessionId,
+        SessionStatus status,
         String participantName,
         String lastMessageContent,
         Instant lastMessageTimestamp,

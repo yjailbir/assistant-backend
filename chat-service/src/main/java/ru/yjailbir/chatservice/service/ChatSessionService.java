@@ -19,7 +19,6 @@ import java.util.stream.Collectors;
 public class ChatSessionService {
 
     private final ChatSessionRepository sessionRepository;
-    private final MessagePersistenceService messagePersistenceService;
 
     // Кэш активных сессий (id -> сессия)
     private final Map<String, ChatSessionDocument> activeSessions = new ConcurrentHashMap<>();
@@ -56,14 +55,16 @@ public class ChatSessionService {
 
     /**
      * Действия, выполняемые только когда ВСЕ подключения пользователя закрыты.
-     * НЕ закрывает чат-сессию.
+     * Не закрывает назначенную оператору чат-сессию.
      */
     public void handleFullDisconnect(String username) {
         // Убираем из очереди, если клиент был там
         if (waitingSet.contains(username)) {
             waitingSet.remove(username);
             waitingUsers.remove(username);
-            messagePersistenceService.deletePendingMessages(username);
+            getActiveSessionByUsername(username)
+                    .filter(session -> session.getStatus() == SessionStatus.WAITING)
+                    .ifPresent(session -> closeSession(session.getId()));
         }
         // Если это был оператор – снимаем онлайн-статус
         if (executorStatus.containsKey(username)) {
@@ -96,21 +97,29 @@ public class ChatSessionService {
     }
 
     // ======== Очередь ========
-    public synchronized boolean addToQueue(String username) {
+    public synchronized Optional<ChatSessionDocument> requestChat(String username) {
         if (getActiveSessionByUsername(username).isPresent() || waitingSet.contains(username)) {
-            return false;
+            return Optional.empty();
         }
+
+        String id = UUID.randomUUID().toString();
+        ChatSessionDocument session = ChatSessionDocument.builder()
+                .id(id)
+                .userId(username)
+                .status(SessionStatus.WAITING)
+                .createdAt(Instant.now())
+                .build();
+        sessionRepository.save(session);
+
+        activeSessions.put(id, session);
+        usernameToActiveSessionId.put(username, id);
         waitingSet.add(username);
         waitingUsers.add(username);
-        return true;
+        return Optional.of(session);
     }
 
     public synchronized String getNextWaitingUser() {
         return waitingUsers.peek();
-    }
-
-    public boolean isUserInQueue(String username) {
-        return waitingSet.contains(username);
     }
 
     // ======== Жизненный цикл сессии ========
@@ -119,22 +128,24 @@ public class ChatSessionService {
             return Optional.empty();
         }
 
+        ChatSessionDocument session = sessionRepository.findWaitingSessionByUser(user)
+                .or(() -> getActiveSessionByUsername(user)
+                        .filter(activeSession -> activeSession.getStatus() == SessionStatus.WAITING))
+                .orElse(null);
+        if (session == null) {
+            return Optional.empty();
+        }
+
         waitingSet.remove(user);
         waitingUsers.remove(user);
 
-        String id = UUID.randomUUID().toString();
-        ChatSessionDocument session = ChatSessionDocument.builder()
-                .id(id)
-                .userId(user)
-                .executorId(executor)
-                .status(SessionStatus.OPEN)
-                .createdAt(Instant.now())
-                .build();
+        session.setExecutorId(executor);
+        session.setStatus(SessionStatus.OPEN);
         sessionRepository.save(session);
 
-        activeSessions.put(id, session);
-        usernameToActiveSessionId.put(user, id);
-        usernameToActiveSessionId.put(executor, id);
+        activeSessions.put(session.getId(), session);
+        usernameToActiveSessionId.put(user, session.getId());
+        usernameToActiveSessionId.put(executor, session.getId());
         markExecutorBusy(executor);
 
         return Optional.of(session);
@@ -154,9 +165,11 @@ public class ChatSessionService {
 
         activeSessions.remove(session.getId());
         usernameToActiveSessionId.remove(session.getUserId());
-        usernameToActiveSessionId.remove(session.getExecutorId());
+        if (session.getExecutorId() != null) {
+            usernameToActiveSessionId.remove(session.getExecutorId());
+        }
 
-        if (executorStatus.get(session.getExecutorId()) == ExecutorStatus.BUSY) {
+        if (session.getExecutorId() != null && executorStatus.get(session.getExecutorId()) == ExecutorStatus.BUSY) {
             markExecutorOnline(session.getExecutorId());
         }
 
@@ -174,11 +187,13 @@ public class ChatSessionService {
             usernameToActiveSessionId.remove(username);
         }
 
-        Optional<ChatSessionDocument> sessionOpt = sessionRepository.findOpenSessionByParticipant(username);
+        Optional<ChatSessionDocument> sessionOpt = sessionRepository.findActiveSessionByParticipant(username);
         sessionOpt.ifPresent(session -> {
             activeSessions.putIfAbsent(session.getId(), session);
             usernameToActiveSessionId.put(session.getUserId(), session.getId());
-            usernameToActiveSessionId.put(session.getExecutorId(), session.getId());
+            if (session.getExecutorId() != null) {
+                usernameToActiveSessionId.put(session.getExecutorId(), session.getId());
+            }
         });
         return sessionOpt;
     }
@@ -189,7 +204,7 @@ public class ChatSessionService {
         return sessionRepository.findById(sessionId);
     }
 
-    public List<ChatSessionDocument> getOpenSessionsForUser(String username) {
-        return sessionRepository.findByParticipantAndStatus(username, username, SessionStatus.OPEN);
+    public List<ChatSessionDocument> getActiveSessionsForUser(String username) {
+        return sessionRepository.findActiveSessionsForUser(username);
     }
 }
