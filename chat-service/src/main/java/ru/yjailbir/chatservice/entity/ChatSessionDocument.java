@@ -24,6 +24,9 @@ public class ChatSessionDocument {
     @Indexed
     private String executorId;
 
+    @Indexed
+    private String clientRequestId;
+
     private SessionStatus status;
 
     private Instant createdAt;

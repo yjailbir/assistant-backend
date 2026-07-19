@@ -25,10 +25,14 @@ public class AuthHandshakeInterceptor implements HandshakeInterceptor {
     @Override
     public boolean beforeHandshake(
             ServerHttpRequest request, ServerHttpResponse response,
-            WebSocketHandler wsHandler, Map<String, Object> attributes
+        WebSocketHandler wsHandler, Map<String, Object> attributes
     ) {
         if (request instanceof ServletServerHttpRequest servletRequest) {
-            String token = servletRequest.getServletRequest().getHeader("Authorization").replace("Bearer ", "");
+            String authHeader = servletRequest.getServletRequest().getHeader("Authorization");
+            if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+                return false;
+            }
+            String token = authHeader.substring(7);
             try {
                 Claims claims = chatJwtService.parseToken(token);
                 String username = claims.getSubject();
