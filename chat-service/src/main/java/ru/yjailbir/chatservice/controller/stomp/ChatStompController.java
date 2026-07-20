@@ -149,6 +149,7 @@ public class ChatStompController {
         sendSystemNotification(executor, session.getId(), "Чат создан");
     }
 
+    @Deprecated
     @MessageMapping("/chat.reconnect")
     public void reconnect(@Payload(required = false) SessionIdRequest request, Principal principal) {
         String username = principal.getName();
