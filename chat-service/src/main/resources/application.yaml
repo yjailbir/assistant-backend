@@ -3,6 +3,14 @@ spring:
     name: chat-service
   mongodb:
     uri: mongodb://mongodb:27017/chatdb
+  servlet:
+    multipart:
+      max-file-size: 20MB
+      max-request-size: 21MB
+
+chat:
+  files:
+    storage-path: ${CHAT_FILES_STORAGE_PATH:./data/chat-files}
 
 springdoc:
   api-docs:

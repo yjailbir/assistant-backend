@@ -18,6 +18,10 @@ services:
     build:
       context: ./chat-service
     container_name: chat-service
+    environment:
+      CHAT_FILES_STORAGE_PATH: /data/chat-files
+    volumes:
+      - chat_files:/data/chat-files
 
   postgres:
     image: postgres:18.3-alpine
@@ -50,3 +54,4 @@ services:
 volumes:
   postgres_data:
   mongo_data:
+  chat_files:
