@@ -10,6 +10,9 @@ import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
+import org.springframework.web.util.UriComponentsBuilder;
+import ru.yjailbir.chatservice.dto.ChatAttachmentDto;
+import ru.yjailbir.chatservice.dto.ChatFileDto;
 import ru.yjailbir.chatservice.dto.SessionStatus;
 import ru.yjailbir.chatservice.entity.ChatFileDocument;
 import ru.yjailbir.chatservice.entity.ChatSessionDocument;
@@ -22,8 +25,11 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
@@ -129,6 +135,54 @@ public class ChatFileService {
         }
 
         return new StoredChatFile(metadata, new FileSystemResource(path));
+    }
+
+    public Optional<List<ChatAttachmentDto>> findOwnedAttachments(
+            String sessionId,
+            String uploader,
+            List<String> fileIds
+    ) {
+        List<ChatAttachmentDto> attachments = new ArrayList<>(fileIds.size());
+        for (String fileId : fileIds) {
+            Optional<ChatFileDocument> file =
+                    fileRepository.findByIdAndSessionIdAndUploader(fileId, sessionId, uploader);
+            if (file.isEmpty()) {
+                return Optional.empty();
+            }
+            attachments.add(toAttachmentDto(file.get()));
+        }
+        return Optional.of(List.copyOf(attachments));
+    }
+
+    public ChatFileDto toDto(ChatFileDocument file) {
+        return new ChatFileDto(
+                file.getId(),
+                file.getSessionId(),
+                file.getUploader(),
+                file.getOriginalName(),
+                file.getContentType(),
+                file.getSize(),
+                buildDownloadUrl(file.getSessionId(), file.getId()),
+                file.getUploadedAt()
+        );
+    }
+
+    private ChatAttachmentDto toAttachmentDto(ChatFileDocument file) {
+        return new ChatAttachmentDto(
+                file.getId(),
+                file.getOriginalName(),
+                file.getContentType(),
+                file.getSize(),
+                buildDownloadUrl(file.getSessionId(), file.getId())
+        );
+    }
+
+    private String buildDownloadUrl(String sessionId, String fileId) {
+        return UriComponentsBuilder
+                .fromPath("/chat/api/chats/{sessionId}/files/{fileId}")
+                .buildAndExpand(sessionId, fileId)
+                .encode()
+                .toUriString();
     }
 
     private ChatSessionDocument requireParticipant(String sessionId, String username) {

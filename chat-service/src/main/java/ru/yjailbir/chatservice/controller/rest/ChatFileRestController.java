@@ -13,7 +13,6 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
-import org.springframework.web.util.UriComponentsBuilder;
 import ru.yjailbir.chatservice.dto.ChatFileDto;
 import ru.yjailbir.chatservice.entity.ChatFileDocument;
 import ru.yjailbir.chatservice.service.ChatFileService;
@@ -35,7 +34,7 @@ public class ChatFileRestController {
             Principal principal
     ) {
         ChatFileDocument stored = chatFileService.store(sessionId, principal.getName(), file);
-        ChatFileDto response = toDto(stored);
+        ChatFileDto response = chatFileService.toDto(stored);
         return ResponseEntity.created(URI.create(response.downloadUrl())).body(response);
     }
 
@@ -60,24 +59,5 @@ public class ChatFileRestController {
                 )
                 .header("X-Content-Type-Options", "nosniff")
                 .body(stored.resource());
-    }
-
-    private ChatFileDto toDto(ChatFileDocument file) {
-        String downloadUrl = UriComponentsBuilder
-                .fromPath("/chat/api/chats/{sessionId}/files/{fileId}")
-                .buildAndExpand(file.getSessionId(), file.getId())
-                .encode()
-                .toUriString();
-
-        return new ChatFileDto(
-                file.getId(),
-                file.getSessionId(),
-                file.getUploader(),
-                file.getOriginalName(),
-                file.getContentType(),
-                file.getSize(),
-                downloadUrl,
-                file.getUploadedAt()
-        );
     }
 }

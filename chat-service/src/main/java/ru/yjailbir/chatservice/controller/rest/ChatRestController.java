@@ -8,6 +8,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import ru.yjailbir.chatservice.dto.ChatMessage;
 import ru.yjailbir.chatservice.dto.ChatSummaryDto;
+import ru.yjailbir.chatservice.dto.MessageType;
 import ru.yjailbir.chatservice.entity.ChatMessageDocument;
 import ru.yjailbir.chatservice.entity.ChatSessionDocument;
 import ru.yjailbir.chatservice.service.ChatSessionService;
@@ -46,6 +47,12 @@ public class ChatRestController {
                     if (lastMsgOpt.isPresent()) {
                         ChatMessageDocument lastMsg = lastMsgOpt.get();
                         lastContent = lastMsg.getContent();
+                        if ((lastContent == null || lastContent.isBlank()) &&
+                                lastMsg.getType() == MessageType.FILE &&
+                                lastMsg.getAttachments() != null &&
+                                !lastMsg.getAttachments().isEmpty()) {
+                            lastContent = "Файл: " + lastMsg.getAttachments().getFirst().originalName();
+                        }
                         lastTimestamp = lastMsg.getTimestamp();
                         lastSender = lastMsg.getSender();
                     }

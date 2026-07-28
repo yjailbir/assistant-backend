@@ -4,6 +4,6 @@ public record StompErrorDto(
         String code,
         String content,
         String sessionId,
-        String clientRequestId
+        String correlationId
 ) {
 }
