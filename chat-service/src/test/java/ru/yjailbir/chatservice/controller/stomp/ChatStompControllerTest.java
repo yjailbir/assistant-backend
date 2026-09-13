@@ -7,12 +7,17 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import ru.yjailbir.chatservice.dto.ChatAttachmentDto;
 import ru.yjailbir.chatservice.dto.ChatMessage;
 import ru.yjailbir.chatservice.dto.MessageType;
 import ru.yjailbir.chatservice.dto.SendMessageRequest;
 import ru.yjailbir.chatservice.dto.SessionStatus;
 import ru.yjailbir.chatservice.dto.StompErrorDto;
+import ru.yjailbir.chatservice.dto.SessionIdRequest;
+import ru.yjailbir.chatservice.dto.SessionEventDto;
+import ru.yjailbir.chatservice.dto.IncomingChatDto;
 import ru.yjailbir.chatservice.entity.ChatMessageDocument;
 import ru.yjailbir.chatservice.entity.ChatSessionDocument;
 import ru.yjailbir.chatservice.service.ChatFileService;
@@ -204,5 +209,109 @@ class ChatStompControllerTest {
                 .status(SessionStatus.OPEN)
                 .createdAt(Instant.parse("2026-07-28T15:00:00Z"))
                 .build();
+    }
+
+    @Test
+    void rejectsUserCallingOperatorCommandsEvenIfShiftExists() {
+        Principal user = authenticated(USER, "USER");
+        controller.registerExecutor(user);
+        controller.acceptChat(new SessionIdRequest(SESSION_ID), user);
+
+        ArgumentCaptor<StompErrorDto> errors = ArgumentCaptor.forClass(StompErrorDto.class);
+        verify(messagingTemplate, org.mockito.Mockito.times(2))
+                .convertAndSendToUser(eq(USER), eq("/queue/errors"), errors.capture());
+        assertThat(errors.getAllValues()).allMatch(error -> error.code().equals("FORBIDDEN"));
+        verify(sessionService, never()).registerExecutor(any());
+        verify(sessionService, never()).acceptSession(any(), any());
+    }
+
+    @Test
+    void rejectsOperatorOutsideShiftForBothRegistrationAndAccept() {
+        Principal executor = authenticated(EXECUTOR, "EXECUTOR");
+        controller.registerExecutor(executor);
+        controller.acceptChat(new SessionIdRequest(SESSION_ID), executor);
+
+        ArgumentCaptor<StompErrorDto> errors = ArgumentCaptor.forClass(StompErrorDto.class);
+        verify(messagingTemplate, org.mockito.Mockito.times(2))
+                .convertAndSendToUser(eq(EXECUTOR), eq("/queue/errors"), errors.capture());
+        assertThat(errors.getAllValues()).allMatch(error -> error.code().equals("EXECUTOR_OFF_SHIFT"));
+        verify(sessionService, never()).startShift(any());
+        verify(sessionService, never()).registerExecutor(any());
+        verify(sessionService, never()).getWaitingSessions();
+        verify(sessionService, never()).acceptSession(any(), any());
+    }
+
+    @Test
+    void registrationOnShiftDeliversPausedSessionsWithoutStartingShift() {
+        when(sessionService.isOnShift(EXECUTOR)).thenReturn(true);
+        ChatSessionDocument session = openSession();
+        session.setStatus(SessionStatus.PAUSED);
+        session.setExecutorId(null);
+        when(sessionService.getWaitingSessions()).thenReturn(List.of(session));
+
+        controller.registerExecutor(authenticated(EXECUTOR, "EXECUTOR"));
+
+        verify(sessionService).registerExecutor(EXECUTOR);
+        verify(sessionService, never()).startShift(any());
+        verify(messagingTemplate).convertAndSendToUser(eq(EXECUTOR), eq("/queue/incoming"), any(IncomingChatDto.class));
+    }
+
+    @Test
+    void acceptOnShiftNotifiesBothParticipants() {
+        when(sessionService.isOnShift(EXECUTOR)).thenReturn(true);
+        when(sessionService.acceptSession(SESSION_ID, EXECUTOR)).thenReturn(Optional.of(openSession()));
+
+        controller.acceptChat(new SessionIdRequest(SESSION_ID), authenticated(EXECUTOR, "EXECUTOR"));
+
+        verify(messagingTemplate).convertAndSendToUser(eq(USER), eq("/queue/session"), any(SessionEventDto.class));
+        verify(messagingTemplate).convertAndSendToUser(eq(EXECUTOR), eq("/queue/session"), any(SessionEventDto.class));
+    }
+
+    @Test
+    void clientCanSendWhilePausedAndPreviousExecutorReceivesNothing() {
+        ChatSessionDocument session = openSession();
+        session.setStatus(SessionStatus.PAUSED);
+        session.setExecutorId(null);
+        when(sessionService.getSessionById(SESSION_ID)).thenReturn(Optional.of(session));
+        when(chatFileService.findOwnedAttachments(SESSION_ID, USER, List.of())).thenReturn(Optional.of(List.of()));
+        when(messagePersistenceService.insertIfAbsent(any(ChatMessageDocument.class)))
+                .thenAnswer(call -> new MessagePersistenceService.MessageSaveResult(call.getArgument(0), true));
+
+        controller.sendMessage(new SendMessageRequest(MESSAGE_ID, SESSION_ID, "Во время паузы", List.of()), principal);
+
+        verify(messagingTemplate).convertAndSendToUser(eq(USER), eq("/queue/messages"), any(ChatMessage.class));
+        verify(messagingTemplate, never()).convertAndSendToUser(eq(EXECUTOR), eq("/queue/messages"), any(ChatMessage.class));
+    }
+
+    @Test
+    void previousExecutorCannotSendRetryAfterReassignment() {
+        ChatSessionDocument session = openSession();
+        session.setExecutorId("new-executor");
+        when(sessionService.getSessionById(SESSION_ID)).thenReturn(Optional.of(session));
+
+        controller.sendMessage(new SendMessageRequest(MESSAGE_ID, SESSION_ID, "Старое сообщение", List.of()),
+                authenticated(EXECUTOR, "EXECUTOR"));
+
+        ArgumentCaptor<StompErrorDto> error = ArgumentCaptor.forClass(StompErrorDto.class);
+        verify(messagingTemplate).convertAndSendToUser(eq(EXECUTOR), eq("/queue/errors"), error.capture());
+        assertThat(error.getValue().code()).isEqualTo("NOT_SESSION_PARTICIPANT");
+        verify(messagePersistenceService, never()).getById(any());
+        verify(messagePersistenceService, never()).insertIfAbsent(any());
+    }
+
+    @Test
+    void offShiftExecutorCannotSendInChatLeftOpenByInterruptedEnd() {
+        when(sessionService.getSessionById(SESSION_ID)).thenReturn(Optional.of(openSession()));
+
+        controller.sendMessage(new SendMessageRequest(MESSAGE_ID, SESSION_ID, "Сообщение", List.of()),
+                authenticated(EXECUTOR, "EXECUTOR"));
+
+        verify(messagePersistenceService, never()).insertIfAbsent(any());
+        verify(messagingTemplate).convertAndSendToUser(eq(EXECUTOR), eq("/queue/errors"), any(StompErrorDto.class));
+    }
+
+    private Principal authenticated(String username, String role) {
+        return new UsernamePasswordAuthenticationToken(username, null,
+                List.of(new SimpleGrantedAuthority("ROLE_" + role)));
     }
 }

@@ -30,4 +30,6 @@ public class ChatSessionDocument {
     private SessionStatus status;
 
     private Instant createdAt;
+
+    private Instant queuedAt;
 }

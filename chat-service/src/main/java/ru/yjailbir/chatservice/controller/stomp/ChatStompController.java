@@ -5,6 +5,7 @@ import org.springframework.messaging.handler.annotation.MessageMapping;
 import org.springframework.messaging.handler.annotation.Payload;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Controller;
+import org.springframework.security.core.Authentication;
 import ru.yjailbir.chatservice.dto.ChatAttachmentDto;
 import ru.yjailbir.chatservice.dto.ChatMessage;
 import ru.yjailbir.chatservice.dto.ChatParticipantDto;
@@ -63,7 +64,22 @@ public class ChatStompController {
     }
 
     private boolean isParticipant(ChatSessionDocument session, String username) {
-        return session.getUserId().equals(username) || username.equals(session.getExecutorId());
+        return session.getUserId().equals(username) ||
+                (username.equals(session.getExecutorId()) &&
+                        (session.getStatus() == SessionStatus.CLOSED || sessionService.isOnShift(username)));
+    }
+
+    private boolean requireExecutorOnShift(Principal principal, String sessionId) {
+        if (!(principal instanceof Authentication authentication) || !authentication.isAuthenticated() ||
+                authentication.getAuthorities().stream().noneMatch(role -> "ROLE_EXECUTOR".equals(role.getAuthority()))) {
+            sendError(principal.getName(), "FORBIDDEN", "Команда доступна только оператору", sessionId, null);
+            return false;
+        }
+        if (!sessionService.isOnShift(principal.getName())) {
+            sendError(principal.getName(), "EXECUTOR_OFF_SHIFT", "Сначала выйдите на смену", sessionId, null);
+            return false;
+        }
+        return true;
     }
 
     private void sendChatMessageToParticipants(ChatSessionDocument session, ChatMessage message) {
@@ -75,6 +91,12 @@ public class ChatStompController {
 
     @MessageMapping("/chat.request")
     public void requestChat(@Payload(required = false) ChatRequest request, Principal principal) {
+        synchronized (sessionService) {
+            requestChatLocked(request, principal);
+        }
+    }
+
+    private void requestChatLocked(ChatRequest request, Principal principal) {
         String username = principal.getName();
         if (request == null || request.clientRequestId() == null || request.clientRequestId().isBlank()) {
             sendError(username, "INVALID_CHAT_REQUEST", "Не указан clientRequestId", null, null);
@@ -115,6 +137,15 @@ public class ChatStompController {
 
     @MessageMapping("/executor.register")
     public void registerExecutor(Principal principal) {
+        synchronized (sessionService) {
+            registerExecutorLocked(principal);
+        }
+    }
+
+    private void registerExecutorLocked(Principal principal) {
+        if (!requireExecutorOnShift(principal, null)) {
+            return;
+        }
         String executor = principal.getName();
         sessionService.registerExecutor(executor);
         sessionService.getWaitingSessions().forEach(session ->
@@ -124,8 +155,17 @@ public class ChatStompController {
 
     @MessageMapping("/chat.accept")
     public void acceptChat(@Payload(required = false) SessionIdRequest request, Principal principal) {
+        synchronized (sessionService) {
+            acceptChatLocked(request, principal);
+        }
+    }
+
+    private void acceptChatLocked(SessionIdRequest request, Principal principal) {
         String executor = principal.getName();
         String sessionId = request == null ? null : request.sessionId();
+        if (!requireExecutorOnShift(principal, sessionId)) {
+            return;
+        }
         if (sessionId == null || sessionId.isBlank()) {
             sendError(executor, "INVALID_ACCEPT_REQUEST", "Не указан sessionId", sessionId, null);
             return;
@@ -136,7 +176,7 @@ public class ChatStompController {
             sendError(
                     executor,
                     "SESSION_NOT_AVAILABLE",
-                    "Не удалось принять чат: сессия уже принята, закрыта или оператор не зарегистрирован",
+                    "Не удалось принять чат: сессия уже принята, закрыта или не существует",
                     sessionId,
                     null
             );
@@ -159,13 +199,19 @@ public class ChatStompController {
 
         messagingTemplate.convertAndSendToUser(session.getUserId(), "/queue/session", userResponse);
         messagingTemplate.convertAndSendToUser(executor, "/queue/session", executorResponse);
-        sendSystemNotification(session.getUserId(), session.getId(), "Чат создан");
-        sendSystemNotification(executor, session.getId(), "Чат создан");
+        sendSystemNotification(session.getUserId(), session.getId(), "Оператор подключился к чату");
+        sendSystemNotification(executor, session.getId(), "Вы подключились к чату");
     }
 
     @Deprecated
     @MessageMapping("/chat.reconnect")
     public void reconnect(@Payload(required = false) SessionIdRequest request, Principal principal) {
+        synchronized (sessionService) {
+            reconnectLocked(request, principal);
+        }
+    }
+
+    private void reconnectLocked(SessionIdRequest request, Principal principal) {
         String username = principal.getName();
         String sessionId = request == null ? null : request.sessionId();
         Optional<ChatSessionDocument> sessionOpt = sessionId == null
@@ -203,6 +249,12 @@ public class ChatStompController {
 
     @MessageMapping("/chat.send")
     public void sendMessage(@Payload(required = false) SendMessageRequest request, Principal principal) {
+        synchronized (sessionService) {
+            sendMessageLocked(request, principal);
+        }
+    }
+
+    private void sendMessageLocked(SendMessageRequest request, Principal principal) {
         String sender = principal.getName();
         String sessionId = request == null ? null : request.sessionId();
         String clientMessageId = request == null ? null : request.clientMessageId();
@@ -360,6 +412,12 @@ public class ChatStompController {
 
     @MessageMapping("/chat.end")
     public void endChat(@Payload(required = false) SessionIdRequest request, Principal principal) {
+        synchronized (sessionService) {
+            endChatLocked(request, principal);
+        }
+    }
+
+    private void endChatLocked(SessionIdRequest request, Principal principal) {
         String username = principal.getName();
         String sessionId = request == null ? null : request.sessionId();
         Optional<ChatSessionDocument> sessionOpt = sessionId == null

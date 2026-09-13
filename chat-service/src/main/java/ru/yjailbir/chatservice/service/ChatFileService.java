@@ -28,7 +28,6 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
-import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -187,8 +186,7 @@ public class ChatFileService {
 
     private ChatSessionDocument requireParticipant(String sessionId, String username) {
         ChatSessionDocument session = sessionService.getSessionById(sessionId).orElse(null);
-        if (session == null ||
-                (!session.getUserId().equals(username) && !Objects.equals(session.getExecutorId(), username))) {
+        if (session == null || !sessionService.isParticipant(session, username)) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Чат не найден");
         }
         return session;

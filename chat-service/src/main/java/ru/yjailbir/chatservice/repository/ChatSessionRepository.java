@@ -11,10 +11,14 @@ import java.util.Optional;
 
 @Repository
 public interface ChatSessionRepository extends MongoRepository<ChatSessionDocument, String> {
-    @Query("{ $or: [ { 'userId': ?0, 'status': { $in: ['WAITING', 'OPEN'] } }, { 'executorId': ?0, 'status': 'OPEN' } ] }")
+    @Query("{ $or: [ { 'userId': ?0, 'status': { $in: ['WAITING', 'OPEN', 'PAUSED'] } }, { 'executorId': ?0, 'status': 'OPEN' } ] }")
     List<ChatSessionDocument> findActiveSessionsForUser(String username);
 
     List<ChatSessionDocument> findByStatusOrderByCreatedAtAsc(SessionStatus status);
+
+    List<ChatSessionDocument> findByStatusIn(List<SessionStatus> statuses);
+
+    List<ChatSessionDocument> findByExecutorIdAndStatus(String executorId, SessionStatus status);
 
     Optional<ChatSessionDocument> findByUserIdAndClientRequestId(String userId, String clientRequestId);
 }

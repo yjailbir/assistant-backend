@@ -17,7 +17,6 @@ import ru.yjailbir.chatservice.service.MessagePersistenceService;
 import java.security.Principal;
 import java.time.Instant;
 import java.util.List;
-import java.util.Objects;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
@@ -77,8 +76,7 @@ public class ChatRestController {
         String username = principal.getName();
         Optional<ChatSessionDocument> sessionOpt = sessionService.getSessionById(sessionId);
 
-        if (sessionOpt.isEmpty() ||
-                (!sessionOpt.get().getUserId().equals(username) && !Objects.equals(sessionOpt.get().getExecutorId(), username))) {
+        if (sessionOpt.isEmpty() || !sessionService.isParticipant(sessionOpt.get(), username)) {
             return ResponseEntity.notFound().build();
         }
 
