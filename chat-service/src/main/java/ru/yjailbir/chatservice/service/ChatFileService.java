@@ -34,7 +34,8 @@ import java.util.UUID;
 
 @Service
 public class ChatFileService {
-    private static final long MAX_FILE_SIZE_BYTES = 20L * 1024 * 1024;
+    private static final long MAX_FILE_SIZE_BYTES = 500L * 1024 * 1024;
+    private static final int MAX_FILES_PER_UPLOAD = 10;
 
     private static final Set<String> ALLOWED_CONTENT_TYPES = Set.of(
             "image/jpeg",
@@ -69,23 +70,60 @@ public class ChatFileService {
         }
     }
 
-    public ChatFileDocument store(String sessionId, String uploader, MultipartFile file) {
+    public List<ChatFileDocument> store(String sessionId, String uploader, List<MultipartFile> files) {
         ChatSessionDocument session = requireParticipant(sessionId, uploader);
         if (session.getStatus() == SessionStatus.CLOSED) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Нельзя загрузить файл в завершённый чат");
         }
+        if (files == null || files.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Нужно передать хотя бы один файл");
+        }
+        if (files.size() > MAX_FILES_PER_UPLOAD) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "За один запрос можно загрузить не более 10 файлов");
+        }
+
+        // Проверяем всю пачку до записи первого файла в хранилище.
+        List<String> contentTypes = files.stream().map(this::validateFile).toList();
+        List<ChatFileDocument> attempted = new ArrayList<>(files.size());
+        try {
+            List<ChatFileDocument> stored = new ArrayList<>(files.size());
+            for (int i = 0; i < files.size(); i++) {
+                stored.add(storeFile(sessionId, uploader, files.get(i), contentTypes.get(i), attempted));
+            }
+            return List.copyOf(stored);
+        } catch (RuntimeException e) {
+            // Включаем текущий файл: запись в БД могла завершиться до ошибки соединения.
+            for (ChatFileDocument file : attempted) {
+                try {
+                    fileRepository.deleteById(file.getId());
+                } catch (RuntimeException cleanupError) {
+                    e.addSuppressed(cleanupError);
+                }
+                deleteQuietly(resolveStoragePath(file.getStorageKey()));
+            }
+            throw e;
+        }
+    }
+
+    private String validateFile(MultipartFile file) {
         if (file == null || file.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Файл не должен быть пустым");
         }
         if (file.getSize() > MAX_FILE_SIZE_BYTES) {
-            throw new ResponseStatusException(HttpStatus.CONTENT_TOO_LARGE, "Размер файла превышает 20 МБ");
+            throw new ResponseStatusException(HttpStatus.CONTENT_TOO_LARGE, "Размер файла превышает 500 МБ");
         }
 
         String contentType = normalizeContentType(file.getContentType());
-        if (!ALLOWED_CONTENT_TYPES.contains(contentType)) {
+        if (!ALLOWED_CONTENT_TYPES.contains(contentType) && !contentType.startsWith("video/")) {
             throw new ResponseStatusException(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "Тип файла не поддерживается");
         }
+        return contentType;
+    }
 
+    private ChatFileDocument storeFile(
+            String sessionId, String uploader, MultipartFile file, String contentType,
+            List<ChatFileDocument> attempted
+    ) {
         String fileId = UUID.randomUUID().toString();
         String originalName = sanitizeOriginalName(file.getOriginalFilename());
         Path target = resolveStoragePath(fileId);
@@ -110,12 +148,8 @@ public class ChatFileService {
                     .uploadedAt(Instant.now())
                     .build();
 
-            try {
-                return fileRepository.save(metadata);
-            } catch (RuntimeException e) {
-                deleteQuietly(target);
-                throw e;
-            }
+            attempted.add(metadata);
+            return fileRepository.save(metadata);
         } catch (IOException e) {
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Не удалось сохранить файл", e);
         } finally {
@@ -198,6 +232,9 @@ public class ChatFileService {
         }
         try {
             MediaType mediaType = MediaType.parseMediaType(contentType);
+            if (!mediaType.isConcrete()) {
+                throw new ResponseStatusException(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "Нужно указать конкретный тип файла");
+            }
             return (mediaType.getType() + "/" + mediaType.getSubtype()).toLowerCase(Locale.ROOT);
         } catch (InvalidMediaTypeException e) {
             throw new ResponseStatusException(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "Некорректный тип файла", e);

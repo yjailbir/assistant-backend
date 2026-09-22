@@ -572,6 +572,95 @@ Authorization: Bearer {token}
 
 Если сессия не существует или пользователь не является её участником, backend возвращает `404 Not Found`.
 
+### 7.3. Загрузка файлов
+
+```http
+POST /chat/api/chats/{sessionId}/files
+Authorization: Bearer {token}
+Content-Type: multipart/form-data; boundary=...
+```
+
+Запрос содержит от 1 до 10 файлов. Для каждого файла нужно добавить отдельную
+multipart-часть с одинаковым именем **`files`**. Один файл отправляется тем же
+способом. Прежнее одиночное поле `file` заменено на `files`.
+
+Ограничения:
+
+- каждый файл непустой и не больше 500 МБ (524 288 000 байт);
+- максимум 10 файлов за запрос;
+- общий размер HTTP-тела — до 5001 МБ: 5000 МБ файлов плюс запас на multipart;
+- разрешены `image/jpeg`, `image/png`, `image/gif`, `application/pdf`, `text/plain`,
+  `application/rtf`, `application/msword` и конкретные MIME-типы `video/*`
+  (например, `video/mp4`, `video/quicktime`, `video/webm`, `video/x-matroska`);
+- каждая часть должна содержать свой `Content-Type`; тип проверяется по этому
+  заголовку, перекодирование и проверка видеокодека не выполняются.
+
+Пример для frontend:
+
+```javascript
+const form = new FormData();
+for (const file of selectedFiles) {
+  form.append("files", file);
+}
+const response = await fetch(`${baseUrl}/chat/api/chats/${sessionId}/files`, {
+  method: "POST",
+  headers: { Authorization: `Bearer ${token}` },
+  body: form,
+});
+// Content-Type с boundary браузер устанавливает сам.
+if (!response.ok) throw new Error(`Загрузка не удалась: ${response.status}`);
+const uploadedFiles = await response.json();
+const attachmentIds = uploadedFiles.map(file => file.fileId);
+```
+
+Успешный ответ — `201 Created`, **массив `ChatFileDto`**, даже для одного файла.
+Порядок элементов совпадает с порядком файлов в запросе. Заголовок `Location`
+не возвращается; у каждого элемента есть собственный `downloadUrl`.
+
+```json
+[
+  {
+    "fileId": "4ea10572-9e6d-4ccd-86ce-7d13316795f2",
+    "sessionId": "550e8400-e29b-41d4-a716-446655440000",
+    "uploader": "user_77",
+    "originalName": "video.mp4",
+    "contentType": "video/mp4",
+    "size": 154201,
+    "downloadUrl": "/chat/api/chats/550e8400-e29b-41d4-a716-446655440000/files/4ea10572-9e6d-4ccd-86ce-7d13316795f2",
+    "uploadedAt": "2026-09-22T12:00:00Z"
+  }
+]
+```
+
+После загрузки отправьте сообщение через `/app/chat.send`, передав полученные
+`fileId` в `attachmentIds`. Сама загрузка сообщение в истории не создаёт.
+Видео передаётся как обычное вложение сообщения типа `FILE`.
+
+До сохранения проверяется вся пачка. Если хотя бы один файл не прошёл проверку,
+вся пачка отклоняется. При сбое записи backend пытается удалить уже сохранённые
+файлы этой пачки и их метаданные; это компенсирующая очистка, а не транзакция
+между MongoDB и файловой системой.
+
+| Статус | Причина |
+|---|---|
+| `400 Bad Request` | Нет поля `files`, пустой файл или больше 10 файлов |
+| `404 Not Found` | Чат не существует или отправитель не является его участником |
+| `409 Conflict` | Чат завершён |
+| `413 Content Too Large` | Превышен размер файла или всего запроса |
+| `415 Unsupported Media Type` | MIME-тип отсутствует, некорректен или не поддерживается |
+| `500 Internal Server Error` | Ошибка сохранения |
+
+### 7.4. Скачивание файла
+
+```http
+GET /chat/api/chats/{sessionId}/files/{fileId}
+Authorization: Bearer {token}
+```
+
+Доступно участнику чата. Ответ `200 OK` содержит файл с его `Content-Type`,
+размером в `Content-Length` и исходным именем в `Content-Disposition: attachment`.
+Если чат или файл недоступен, возвращается `404 Not Found`.
+
 ## 8. Ошибки STOMP
 
 | `code` | Когда возникает |
@@ -700,6 +789,15 @@ Chat OpenAPI JSON:   http://185.102.139.25:8080/v3/api-docs/chat
 ```
 
 Swagger описывает REST API. STOMP-команды и персональные очереди документируются в этом файле.
+
+Во всех REST-контроллерах используется единое оформление: `@Tag` задаёт группу,
+`@Operation` — краткое название и подробное описание на русском, `@ApiResponse` —
+успешный HTTP-статус и схему ответа из возвращаемого типа. Описание операции
+указывает требования к доступу, поведение, ограничения и ожидаемые ошибки.
+
+Группы документации: «Аутентификация», «Чаты», «Файлы чатов», «Смены операторов».
+В gateway собственных REST-контроллеров нет: он предоставляет общую Swagger UI
+и маршрутизирует OpenAPI-документы `auth-service` и `chat-service`.
 
 
 ## 13. Внедрение смен и восстановление после сбоя

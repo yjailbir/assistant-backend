@@ -57,7 +57,7 @@ class ChatTransferAccessTest {
         assertThatThrownBy(() -> files.load("chat", "old-file", "old-operator"))
                 .isInstanceOfSatisfying(ResponseStatusException.class,
                         error -> assertThat(error.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND));
-        assertThatThrownBy(() -> files.store("chat", "old-operator", upload()))
+        assertThatThrownBy(() -> files.store("chat", "old-operator", List.of(upload())))
                 .isInstanceOfSatisfying(ResponseStatusException.class,
                         error -> assertThat(error.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND));
         verify(messages, never()).getHistory(any());
@@ -87,7 +87,7 @@ class ChatTransferAccessTest {
         when(fileRepository.save(any())).thenAnswer(call -> call.getArgument(0));
         when(messages.getHistory("chat")).thenReturn(List.of());
 
-        ChatFileDocument stored = files.store("chat", "client", upload());
+        ChatFileDocument stored = files.store("chat", "client", List.of(upload())).getFirst();
 
         assertThat(stored.getSessionId()).isEqualTo("chat");
         assertThat(stored.getUploader()).isEqualTo("client");
@@ -96,6 +96,6 @@ class ChatTransferAccessTest {
     }
 
     private MockMultipartFile upload() {
-        return new MockMultipartFile("file", "note.txt", "text/plain", new byte[]{1, 2, 3});
+        return new MockMultipartFile("files", "note.txt", "text/plain", new byte[]{1, 2, 3});
     }
 }
