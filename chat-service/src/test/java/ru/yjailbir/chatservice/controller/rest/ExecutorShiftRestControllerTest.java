@@ -19,9 +19,15 @@ import org.springframework.web.context.WebApplicationContext;
 import ru.yjailbir.chatservice.config.JwtRequestFilter;
 import ru.yjailbir.chatservice.config.SecurityConfig;
 import ru.yjailbir.chatservice.dto.ShiftStatus;
+import ru.yjailbir.chatservice.dto.SessionStatus;
+import ru.yjailbir.chatservice.entity.ChatSessionDocument;
 import ru.yjailbir.chatservice.service.ChatJwtService;
 import ru.yjailbir.chatservice.service.ChatSessionService;
 import ru.yjailbir.chatservice.service.MessagePersistenceService;
+
+import java.time.Instant;
+import java.util.List;
+import java.util.Optional;
 
 import static org.hamcrest.Matchers.hasItem;
 import static org.mockito.Mockito.mock;
@@ -95,6 +101,10 @@ class ExecutorShiftRestControllerTest {
                 .andExpect(jsonPath("$.paths['/api/executor/shift'].get").exists())
                 .andExpect(jsonPath("$.paths['/api/executor/shift/start'].post").exists())
                 .andExpect(jsonPath("$.paths['/api/executor/shift/end'].post").exists())
+                .andExpect(jsonPath("$.paths['/api/chats/closed'].get").exists())
+                .andExpect(jsonPath("$.paths['/api/chats/{sessionId}'].get").exists())
+                .andExpect(jsonPath("$.components.schemas.ChatDetailsDto.properties.closedAt").exists())
+                .andExpect(jsonPath("$.components.schemas.ChatSummaryDto.properties.closedBy").exists())
                 .andExpect(jsonPath("$.components.schemas.ShiftStateDto.properties.status.enum", hasItem("OFF_SHIFT")))
                 .andExpect(jsonPath("$.components.schemas.ChatSummaryDto.properties.status.enum", hasItem("PAUSED")));
     }
@@ -104,6 +114,45 @@ class ExecutorShiftRestControllerTest {
         when(claims.getSubject()).thenReturn(username);
         when(claims.get("role", String.class)).thenReturn(role);
         when(jwtService.parseToken(token)).thenReturn(claims);
+    }
+
+    @Test
+    void archiveAndDetailsRequireAuthentication() throws Exception {
+        mvc.perform(get("/api/chats/closed")).andExpect(status().isForbidden());
+        mvc.perform(get("/api/chats/chat")).andExpect(status().isForbidden());
+        verifyNoInteractions(sessionService);
+    }
+
+    @Test
+    void archiveAndDetailsExposeCompletionMetadataAndUseAuthenticatedAccount() throws Exception {
+        Instant closedAt = Instant.parse("2026-11-05T10:00:00Z");
+        ChatSessionDocument session = ChatSessionDocument.builder().id("chat").userId("client")
+                .executorId("operator").status(SessionStatus.CLOSED).clientRequestId("request")
+                .closedAt(closedAt).closedBy("operator").build();
+        when(sessionService.getClosedSessionsForUser("operator")).thenReturn(List.of(session));
+        when(sessionService.getSessionById("chat")).thenReturn(Optional.of(session));
+        when(sessionService.isParticipant(session, "operator")).thenReturn(true);
+        when(sessionService.isParticipant(session, "client")).thenReturn(true);
+        token("outsider-token", "outsider", "USER");
+
+        mvc.perform(get("/api/chats/closed").header("Authorization", "Bearer operator-token"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].sessionId").value("chat"))
+                .andExpect(jsonPath("$[0].closedAt").value(closedAt.toString()))
+                .andExpect(jsonPath("$[0].closedBy").value("operator"));
+        mvc.perform(get("/api/chats/chat").header("Authorization", "Bearer operator-token"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("CLOSED"))
+                .andExpect(jsonPath("$.participant.username").value("client"))
+                .andExpect(jsonPath("$.closedBy").value("operator"));
+        mvc.perform(get("/api/chats/chat").header("Authorization", "Bearer client-token"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.participant.username").value("operator"));
+        mvc.perform(get("/api/chats/chat").header("Authorization", "Bearer outsider-token"))
+                .andExpect(status().isNotFound());
+        mvc.perform(get("/api/chats/missing").header("Authorization", "Bearer operator-token"))
+                .andExpect(status().isNotFound());
+        verify(sessionService).getClosedSessionsForUser("operator");
     }
 
     @Configuration(proxyBeanMethods = false)

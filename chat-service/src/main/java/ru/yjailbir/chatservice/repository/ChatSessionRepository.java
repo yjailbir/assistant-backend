@@ -14,6 +14,11 @@ public interface ChatSessionRepository extends MongoRepository<ChatSessionDocume
     @Query("{ $or: [ { 'userId': ?0, 'status': { $in: ['WAITING', 'OPEN', 'PAUSED'] } }, { 'executorId': ?0, 'status': 'OPEN' } ] }")
     List<ChatSessionDocument> findActiveSessionsForUser(String username);
 
+    @Query("{ 'status': 'CLOSED', $or: [ { 'userId': ?0 }, { 'executorId': ?0 } ] }")
+    List<ChatSessionDocument> findClosedSessionsForUser(String username);
+
+    List<ChatSessionDocument> findByStatusAndCompletionPendingTrue(SessionStatus status);
+
     List<ChatSessionDocument> findByStatusOrderByCreatedAtAsc(SessionStatus status);
 
     List<ChatSessionDocument> findByStatusIn(List<SessionStatus> statuses);

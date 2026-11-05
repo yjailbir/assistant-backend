@@ -67,6 +67,90 @@ class ChatStompControllerTest {
     }
 
     @Test
+    void clientCannotCompleteChat() {
+        controller.endChat(new SessionIdRequest(SESSION_ID), principal);
+        verify(sessionService, never()).closeSession(any(), any());
+        verify(messagingTemplate).convertAndSendToUser(eq(USER), eq("/queue/errors"),
+                eq(new StompErrorDto("FORBIDDEN", "Завершить заявку может только оператор", SESSION_ID, null)));
+    }
+
+    @Test
+    void completionRequiresSessionId() {
+        Principal executor = new UsernamePasswordAuthenticationToken(EXECUTOR, null,
+                List.of(new SimpleGrantedAuthority("ROLE_EXECUTOR")));
+        controller.endChat(null, executor);
+        controller.endChat(new SessionIdRequest(" "), executor);
+        verify(sessionService, never()).closeSession(any(), any());
+        verify(messagingTemplate).convertAndSendToUser(eq(EXECUTOR), eq("/queue/errors"),
+                eq(new StompErrorDto("INVALID_END_REQUEST", "Не указан sessionId", null, null)));
+    }
+
+    @Test
+    void completionDelegatesOwnershipAndShiftValidationToService() {
+        Principal executor = new UsernamePasswordAuthenticationToken(EXECUTOR, null,
+                List.of(new SimpleGrantedAuthority("ROLE_EXECUTOR")));
+        when(sessionService.closeSession(SESSION_ID, EXECUTOR)).thenReturn(
+                new ChatSessionService.CloseSessionResult(null, ChatSessionService.CloseSessionError.NOT_SESSION_EXECUTOR));
+
+        controller.endChat(new SessionIdRequest(SESSION_ID), executor);
+
+        verify(messagingTemplate).convertAndSendToUser(eq(EXECUTOR), eq("/queue/errors"),
+                eq(new StompErrorDto("NOT_SESSION_EXECUTOR", "Заявка не назначена вам; сначала примите её", SESSION_ID, null)));
+    }
+
+    @Test
+    void completionRetryDoesNotRequireShiftInControllerOrCreateAnotherMessage() {
+        Principal executor = new UsernamePasswordAuthenticationToken(EXECUTOR, null,
+                List.of(new SimpleGrantedAuthority("ROLE_EXECUTOR")));
+        ChatSessionDocument session = openSession();
+        session.setStatus(SessionStatus.CLOSED);
+        when(sessionService.closeSession(SESSION_ID, EXECUTOR))
+                .thenReturn(new ChatSessionService.CloseSessionResult(session, null));
+
+        controller.endChat(new SessionIdRequest(SESSION_ID), executor);
+
+        verify(sessionService).closeSession(SESSION_ID, EXECUTOR);
+        verify(sessionService, never()).isOnShift(any());
+        verify(messagePersistenceService, never()).save(any());
+        verify(messagingTemplate, never()).convertAndSendToUser(any(), eq("/queue/errors"), any(Object.class));
+    }
+
+    @Test
+    void completionFailureTellsExecutorToReconcileAndRetry() {
+        Principal executor = new UsernamePasswordAuthenticationToken(EXECUTOR, null,
+                List.of(new SimpleGrantedAuthority("ROLE_EXECUTOR")));
+        when(sessionService.closeSession(SESSION_ID, EXECUTOR)).thenThrow(new IllegalStateException("database unavailable"));
+
+        controller.endChat(new SessionIdRequest(SESSION_ID), executor);
+
+        ArgumentCaptor<StompErrorDto> error = ArgumentCaptor.forClass(StompErrorDto.class);
+        verify(messagingTemplate).convertAndSendToUser(eq(EXECUTOR), eq("/queue/errors"), error.capture());
+        assertThat(error.getValue().code()).isEqualTo("SESSION_END_FAILED");
+        assertThat(error.getValue().sessionId()).isEqualTo(SESSION_ID);
+    }
+
+    @Test
+    void closedChatRejectsNewMessagesButAcknowledgesRetryOfExistingMessage() {
+        ChatSessionDocument session = openSession();
+        session.setStatus(SessionStatus.CLOSED);
+        when(sessionService.getSessionById(SESSION_ID)).thenReturn(Optional.of(session));
+        when(messagePersistenceService.getById(MESSAGE_ID)).thenReturn(Optional.empty());
+        SendMessageRequest request = new SendMessageRequest(MESSAGE_ID, SESSION_ID, "Итог", List.of());
+
+        controller.sendMessage(request, principal);
+
+        verify(messagePersistenceService, never()).insertIfAbsent(any());
+        ArgumentCaptor<StompErrorDto> error = ArgumentCaptor.forClass(StompErrorDto.class);
+        verify(messagingTemplate).convertAndSendToUser(eq(USER), eq("/queue/errors"), error.capture());
+        assertThat(error.getValue().code()).isEqualTo("SESSION_CLOSED");
+
+        ChatMessage saved = new ChatMessage(MESSAGE_ID, SESSION_ID, USER, "Итог", MessageType.TEXT, List.of(), Instant.now());
+        when(messagePersistenceService.getById(MESSAGE_ID)).thenReturn(Optional.of(ChatMessageDocument.from(saved)));
+        controller.sendMessage(request, principal);
+        verify(messagingTemplate).convertAndSendToUser(USER, "/queue/messages", saved);
+    }
+
+    @Test
     void sendsFileMessageToSenderAndRecipient() {
         ChatSessionDocument session = openSession();
         ChatAttachmentDto attachment = new ChatAttachmentDto(

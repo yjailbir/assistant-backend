@@ -98,4 +98,31 @@ class ChatTransferAccessTest {
     private MockMultipartFile upload() {
         return new MockMultipartFile("files", "note.txt", "text/plain", new byte[]{1, 2, 3});
     }
+
+    @Test
+    void closedChatKeepsHistoryAndDownloadsForBothParticipantsOutsideShift() throws Exception {
+        session.setStatus(SessionStatus.CLOSED);
+        session.setClosedAt(Instant.now());
+        session.setClosedBy("new-operator");
+        when(sessions.isOnShift("new-operator")).thenReturn(false);
+        ChatMessage message = new ChatMessage("message", "chat", "client", "История",
+                MessageType.TEXT, List.of(), Instant.now());
+        when(messages.getHistory("chat")).thenReturn(List.of(ChatMessageDocument.from(message)));
+        Files.writeString(storage.resolve("file"), "attachment");
+        when(fileRepository.findByIdAndSessionId("file", "chat")).thenReturn(Optional.of(
+                ChatFileDocument.builder().id("file").sessionId("chat").storageKey("file")
+                        .originalName("note.txt").contentType("text/plain").build()));
+
+        for (String participant : List.of("client", "new-operator")) {
+            assertThat(chats.getChat("chat", () -> participant).getBody().closedBy()).isEqualTo("new-operator");
+            assertThat(chats.getMessages("chat", () -> participant).getBody()).containsExactly(message);
+            assertThat(files.load("chat", "file", participant).resource().getContentAsByteArray())
+                    .isEqualTo("attachment".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            assertThatThrownBy(() -> files.store("chat", participant, List.of(upload())))
+                    .isInstanceOfSatisfying(ResponseStatusException.class,
+                            error -> assertThat(error.getStatusCode()).isEqualTo(HttpStatus.CONFLICT));
+        }
+        assertThat(chats.getChat("chat", () -> "old-operator").getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        verify(fileRepository, never()).save(any());
+    }
 }

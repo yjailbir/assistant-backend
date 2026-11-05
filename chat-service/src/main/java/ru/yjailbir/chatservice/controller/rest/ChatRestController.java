@@ -10,6 +10,8 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import ru.yjailbir.chatservice.dto.ChatMessage;
+import ru.yjailbir.chatservice.dto.ChatDetailsDto;
+import ru.yjailbir.chatservice.dto.ChatParticipantDto;
 import ru.yjailbir.chatservice.dto.ChatSummaryDto;
 import ru.yjailbir.chatservice.dto.MessageType;
 import ru.yjailbir.chatservice.entity.ChatMessageDocument;
@@ -26,7 +28,7 @@ import java.util.stream.Collectors;
 @RestController
 @RequestMapping("/api")
 @RequiredArgsConstructor
-@Tag(name = "Чаты", description = "Список активных чатов и история сообщений текущего пользователя")
+@Tag(name = "Чаты", description = "Активные и завершённые заявки, состояние чатов и история сообщений")
 public class ChatRestController {
     private final ChatSessionService sessionService;
     private final MessagePersistenceService messagePersistenceService;
@@ -42,7 +44,45 @@ public class ChatRestController {
         String username = principal.getName();
         List<ChatSessionDocument> sessions = sessionService.getActiveSessionsForUser(username);
 
-        List<ChatSummaryDto> summaries = sessions.stream()
+        return ResponseEntity.ok(toSummaries(sessions, username));
+    }
+
+    @GetMapping("/chats/closed")
+    @Operation(summary = "Получить завершённые заявки",
+            description = "Требуется JWT. Возвращает CLOSED-чаты клиента или назначенного при закрытии оператора, " +
+                    "включая оператора вне смены. Сортировка по времени завершения от новых к старым; " +
+                    "для старых чатов без closedAt используется createdAt. closedAt и closedBy старых чатов " +
+                    "могут быть null. При отсутствии заявок — пустой массив. Без действительного JWT — 403.")
+    @ApiResponse(responseCode = "200", description = "Завершённые заявки", useReturnTypeSchema = true)
+    public ResponseEntity<List<ChatSummaryDto>> getClosedChats(Principal principal) {
+        String username = principal.getName();
+        return ResponseEntity.ok(toSummaries(sessionService.getClosedSessionsForUser(username), username));
+    }
+
+    @GetMapping("/chats/{sessionId}")
+    @Operation(summary = "Получить состояние заявки",
+            description = "Требуется JWT и участие в чате. Возвращает текущее состояние, собеседника и сведения " +
+                    "о завершении; CLOSED доступен назначенному участнику и вне смены. closedAt и closedBy " +
+                    "равны null у незавершённых и старых закрытых чатов. Чужая или отсутствующая заявка — 404. " +
+                    "Без действительного JWT — 403.")
+    @ApiResponse(responseCode = "200", description = "Состояние заявки", useReturnTypeSchema = true)
+    public ResponseEntity<ChatDetailsDto> getChat(@PathVariable String sessionId, Principal principal) {
+        String username = principal.getName();
+        Optional<ChatSessionDocument> sessionOpt = sessionService.getSessionById(sessionId);
+        if (sessionOpt.isEmpty() || !sessionService.isParticipant(sessionOpt.get(), username)) {
+            return ResponseEntity.notFound().build();
+        }
+        ChatSessionDocument session = sessionOpt.get();
+        ChatParticipantDto participant = session.getUserId().equals(username)
+                ? (session.getExecutorId() == null ? null : new ChatParticipantDto(
+                        session.getExecutorId(), session.getExecutorId(), "EXECUTOR"))
+                : new ChatParticipantDto(session.getUserId(), session.getUserId(), "USER");
+        return ResponseEntity.ok(new ChatDetailsDto(session.getId(), session.getClientRequestId(),
+                session.getStatus(), participant, session.getCreatedAt(), session.getClosedAt(), session.getClosedBy()));
+    }
+
+    private List<ChatSummaryDto> toSummaries(List<ChatSessionDocument> sessions, String username) {
+        return sessions.stream()
                 .map(session -> {
                     String participant = session.getUserId().equals(username) ?
                             session.getExecutorId() : session.getUserId();
@@ -72,12 +112,12 @@ public class ChatRestController {
                             participant,
                             lastContent,
                             lastTimestamp,
-                            lastSender
+                            lastSender,
+                            session.getClosedAt(),
+                            session.getClosedBy()
                     );
                 })
                 .collect(Collectors.toList());
-
-        return ResponseEntity.ok(summaries);
     }
 
     @GetMapping("/chats/{sessionId}/messages")

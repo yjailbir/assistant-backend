@@ -14,6 +14,10 @@ public record ChatSummaryDto(
         @Schema(types = {"string", "null"})
         Instant lastMessageTimestamp,
         @Schema(types = {"string", "null"})
-        String lastMessageSender
+        String lastMessageSender,
+        @Schema(types = {"string", "null"}, format = "date-time")
+        Instant closedAt,
+        @Schema(types = {"string", "null"})
+        String closedBy
 ) {
 }

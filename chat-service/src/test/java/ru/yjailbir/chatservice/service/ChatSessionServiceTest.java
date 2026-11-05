@@ -4,9 +4,11 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import ru.yjailbir.chatservice.dto.SessionEventDto;
+import ru.yjailbir.chatservice.dto.ChatMessage;
 import ru.yjailbir.chatservice.dto.SessionStatus;
 import ru.yjailbir.chatservice.dto.ShiftStatus;
 import ru.yjailbir.chatservice.entity.ChatSessionDocument;
+import ru.yjailbir.chatservice.entity.ChatMessageDocument;
 import ru.yjailbir.chatservice.entity.ExecutorShiftDocument;
 import ru.yjailbir.chatservice.repository.ChatSessionRepository;
 import ru.yjailbir.chatservice.repository.ExecutorShiftRepository;
@@ -33,6 +35,7 @@ import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.never;
 
 class ChatSessionServiceTest {
     private final Map<String, ChatSessionDocument> sessions = new ConcurrentHashMap<>();
@@ -40,11 +43,13 @@ class ChatSessionServiceTest {
     private final ChatSessionRepository sessionRepository = mock(ChatSessionRepository.class);
     private final ExecutorShiftRepository shiftRepository = mock(ExecutorShiftRepository.class);
     private final SimpMessagingTemplate messagingTemplate = mock(SimpMessagingTemplate.class);
+    private final MessagePersistenceService messages = mock(MessagePersistenceService.class);
+    private final Map<String, ChatMessageDocument> history = new ConcurrentHashMap<>();
     private ChatSessionService service;
 
     @BeforeEach
     void setUp() {
-        service = new ChatSessionService(sessionRepository, shiftRepository, messagingTemplate);
+        service = new ChatSessionService(sessionRepository, shiftRepository, messagingTemplate, messages);
         when(shiftRepository.findById(anyString())).thenAnswer(call -> {
             String id = call.getArgument(0);
             return Optional.ofNullable(shifts.get(id)).map(status -> new ExecutorShiftDocument(id, status));
@@ -71,6 +76,19 @@ class ChatSessionServiceTest {
             return sessions.values().stream().filter(session -> statuses.contains(session.getStatus()))
                     .map(this::copy).toList();
         });
+        when(messages.insertIfAbsent(any())).thenAnswer(call -> {
+            ChatMessageDocument message = call.getArgument(0);
+            ChatMessageDocument previous = history.putIfAbsent(message.getId(), message);
+            return new MessagePersistenceService.MessageSaveResult(previous == null ? message : previous, previous == null);
+        });
+        when(sessionRepository.findByStatusAndCompletionPendingTrue(any())).thenAnswer(call ->
+                sessions.values().stream().filter(session -> session.getStatus() == call.getArgument(0)
+                        && session.isCompletionPending()).map(this::copy).toList());
+        when(sessionRepository.findClosedSessionsForUser(anyString())).thenAnswer(call ->
+                sessions.values().stream().filter(session -> session.getStatus() == SessionStatus.CLOSED &&
+                        (session.getUserId().equals(call.getArgument(0)) ||
+                                Objects.equals(session.getExecutorId(), call.getArgument(0))))
+                        .map(this::copy).toList());
     }
 
     @Test
@@ -97,7 +115,7 @@ class ChatSessionServiceTest {
 
         service.startShift("operator");
         service.handleFullDisconnect("operator");
-        service = new ChatSessionService(sessionRepository, shiftRepository, messagingTemplate);
+        service = new ChatSessionService(sessionRepository, shiftRepository, messagingTemplate, messages);
         service.recoverInterruptedShiftEnds();
 
         assertThat(service.isOnShift("operator")).isTrue();
@@ -160,7 +178,7 @@ class ChatSessionServiceTest {
         assertThat(service.isParticipant(sessions.get("two"), "first")).isFalse();
         assertThat(service.acceptSession("one", "first")).isEmpty();
 
-        service = new ChatSessionService(sessionRepository, shiftRepository, messagingTemplate);
+        service = new ChatSessionService(sessionRepository, shiftRepository, messagingTemplate, messages);
         service.recoverInterruptedShiftEnds();
 
         assertThat(sessions.get("two").getStatus()).isEqualTo(SessionStatus.PAUSED);
@@ -258,6 +276,191 @@ class ChatSessionServiceTest {
         assertThat(sessions.get("chat").getExecutorId()).isNull();
     }
 
+    @Test
+    void completionPreservesAssignmentAndHistoryAndRetryAfterShiftEndIsIdempotent() {
+        service.startShift("operator");
+        putSession("chat", SessionStatus.OPEN, "operator");
+        putSession("other", SessionStatus.OPEN, "operator");
+
+        var result = service.closeSession("chat", "operator");
+        Instant closedAt = result.session().getClosedAt();
+        assertThat(result.error()).isNull();
+        assertThat(closedAt).isNotNull();
+        assertThat(result.session().getClosedBy()).isEqualTo("operator");
+        assertThat(result.session().getExecutorId()).isEqualTo("operator");
+        assertThat(result.session().isCompletionPending()).isFalse();
+        assertThat(sessions.get("other").getStatus()).isEqualTo(SessionStatus.OPEN);
+        assertThat(service.isOnShift("operator")).isTrue();
+        assertThat(history).hasSize(1);
+        ChatMessage event = history.values().iterator().next().toChatMessage();
+        verify(messagingTemplate).convertAndSendToUser("client", "/queue/session-end", event);
+        verify(messagingTemplate).convertAndSendToUser("operator", "/queue/session-end", event);
+        verify(messagingTemplate).convertAndSendToUser(eq("operator"), eq("/queue/session"),
+                eq(new SessionEventDto("chat", "request-chat", SessionStatus.CLOSED,
+                        new ru.yjailbir.chatservice.dto.ChatParticipantDto("client", "client", "USER"))));
+
+        service.endShift("operator");
+        assertThat(service.closeSession("chat", "operator").error()).isNull();
+        assertThat(sessions.get("chat").getClosedAt()).isEqualTo(closedAt);
+        assertThat(history).hasSize(1);
+        assertThat(service.isParticipant(sessions.get("chat"), "client")).isTrue();
+        assertThat(service.isParticipant(sessions.get("chat"), "operator")).isTrue();
+        assertThat(service.isParticipant(sessions.get("chat"), "another")).isFalse();
+        assertThat(service.acceptSession("chat", "operator")).isEmpty();
+    }
+
+    @Test
+    void onlyAssignedOperatorOnShiftCanCompleteOpenChat() {
+        service.startShift("operator");
+        putSession("chat", SessionStatus.OPEN, "operator");
+        assertThat(service.closeSession("chat", "client").error())
+                .isEqualTo(ChatSessionService.CloseSessionError.NOT_SESSION_EXECUTOR);
+        assertThat(service.closeSession("chat", "another").error())
+                .isEqualTo(ChatSessionService.CloseSessionError.NOT_SESSION_EXECUTOR);
+        shifts.put("operator", ShiftStatus.OFF_SHIFT);
+        assertThat(service.closeSession("chat", "operator").error())
+                .isEqualTo(ChatSessionService.CloseSessionError.EXECUTOR_OFF_SHIFT);
+        shifts.put("operator", ShiftStatus.ON_SHIFT);
+        putSession("waiting", SessionStatus.WAITING, null);
+        putSession("paused", SessionStatus.PAUSED, null);
+        for (String id : List.of("waiting", "paused")) {
+            assertThat(service.closeSession(id, "operator").error())
+                    .isEqualTo(ChatSessionService.CloseSessionError.NOT_SESSION_EXECUTOR);
+        }
+        putSession("invalid", SessionStatus.PAUSED, "operator");
+        assertThat(service.closeSession("invalid", "operator").error())
+                .isEqualTo(ChatSessionService.CloseSessionError.SESSION_NOT_OPEN);
+        assertThat(service.closeSession("missing", "operator").error())
+                .isEqualTo(ChatSessionService.CloseSessionError.SESSION_NOT_FOUND);
+        assertThat(history).isEmpty();
+        assertThat(sessions.get("chat").getStatus()).isEqualTo(SessionStatus.OPEN);
+    }
+
+    @Test
+    void restartRepairsMissingCompletionMessage() {
+        service.startShift("operator");
+        putSession("chat", SessionStatus.OPEN, "operator");
+        doThrow(new IllegalStateException("database unavailable"))
+                .doAnswer(call -> {
+                    ChatMessageDocument message = call.getArgument(0);
+                    history.putIfAbsent(message.getId(), message);
+                    return new MessagePersistenceService.MessageSaveResult(history.get(message.getId()), true);
+                }).when(messages).insertIfAbsent(any());
+
+        assertThatThrownBy(() -> service.closeSession("chat", "operator"))
+                .isInstanceOf(IllegalStateException.class);
+        assertThat(sessions.get("chat").getStatus()).isEqualTo(SessionStatus.CLOSED);
+        assertThat(sessions.get("chat").isCompletionPending()).isTrue();
+        assertThat(history).isEmpty();
+        service = new ChatSessionService(sessionRepository, shiftRepository, messagingTemplate, messages);
+        service.recoverInterruptedClosures();
+        service.recoverInterruptedClosures();
+
+        assertThat(sessions.get("chat").isCompletionPending()).isFalse();
+        assertThat(history).hasSize(1);
+        assertThat(service.closeSession("chat", "operator").error()).isNull();
+        assertThat(history).hasSize(1);
+    }
+
+    @Test
+    void failureSavingCompletionMarkerDoesNotDuplicateMessageOnRecovery() {
+        service.startShift("operator");
+        putSession("chat", SessionStatus.OPEN, "operator");
+        AtomicBoolean failed = new AtomicBoolean();
+        doAnswer(call -> {
+            ChatSessionDocument session = call.getArgument(0);
+            if (session.getStatus() == SessionStatus.CLOSED && !session.isCompletionPending()
+                    && failed.compareAndSet(false, true)) {
+                throw new IllegalStateException("database unavailable");
+            }
+            return save(session);
+        }).when(sessionRepository).save(any());
+        assertThatThrownBy(() -> service.closeSession("chat", "operator"))
+                .isInstanceOf(IllegalStateException.class);
+        assertThat(history).hasSize(1);
+        assertThat(sessions.get("chat").isCompletionPending()).isTrue();
+
+        service.recoverInterruptedClosures();
+        assertThat(history).hasSize(1);
+        assertThat(sessions.get("chat").isCompletionPending()).isFalse();
+    }
+
+    @Test
+    void failedInitialSaveLeavesChatOpenAndRetryCanCompleteIt() {
+        service.startShift("operator");
+        putSession("chat", SessionStatus.OPEN, "operator");
+        doThrow(new IllegalStateException("database unavailable"))
+                .doAnswer(call -> save(call.getArgument(0))).when(sessionRepository).save(any());
+
+        assertThatThrownBy(() -> service.closeSession("chat", "operator"))
+                .isInstanceOf(IllegalStateException.class);
+        assertThat(sessions.get("chat").getStatus()).isEqualTo(SessionStatus.OPEN);
+        assertThat(history).isEmpty();
+        assertThat(service.closeSession("chat", "operator").error()).isNull();
+        assertThat(sessions.get("chat").getStatus()).isEqualTo(SessionStatus.CLOSED);
+        assertThat(history).hasSize(1);
+    }
+
+    @Test
+    void simultaneousCompletionCommandsPreserveOneResult() throws Exception {
+        service.startShift("operator");
+        putSession("chat", SessionStatus.OPEN, "operator");
+        CountDownLatch ready = new CountDownLatch(2);
+        CountDownLatch go = new CountDownLatch(1);
+        try (var pool = Executors.newFixedThreadPool(2)) {
+            var first = pool.submit(() -> {
+                ready.countDown();
+                assertThat(go.await(5, TimeUnit.SECONDS)).isTrue();
+                return service.closeSession("chat", "operator");
+            });
+            var second = pool.submit(() -> {
+                ready.countDown();
+                assertThat(go.await(5, TimeUnit.SECONDS)).isTrue();
+                return service.closeSession("chat", "operator");
+            });
+            assertThat(ready.await(5, TimeUnit.SECONDS)).isTrue();
+            go.countDown();
+            var firstResult = first.get(5, TimeUnit.SECONDS);
+            var secondResult = second.get(5, TimeUnit.SECONDS);
+            assertThat(firstResult.error()).isNull();
+            assertThat(secondResult.error()).isNull();
+            assertThat(firstResult.session().getClosedAt()).isEqualTo(secondResult.session().getClosedAt());
+            assertThat(firstResult.session().getClosureMessageId()).isEqualTo(secondResult.session().getClosureMessageId());
+        }
+        assertThat(history).hasSize(1);
+    }
+
+    @Test
+    void brokerFailureDoesNotUndoClosureOrPreventOtherParticipantNotification() {
+        service.startShift("operator");
+        putSession("chat", SessionStatus.OPEN, "operator");
+        doThrow(new IllegalStateException("broker unavailable")).when(messagingTemplate)
+                .convertAndSendToUser(eq("client"), anyString(), any(Object.class));
+
+        assertThat(service.closeSession("chat", "operator").error()).isNull();
+        assertThat(sessions.get("chat").getStatus()).isEqualTo(SessionStatus.CLOSED);
+        verify(messagingTemplate).convertAndSendToUser(eq("operator"), eq("/queue/session-end"), any(ChatMessage.class));
+    }
+
+    @Test
+    void archiveIncludesOnlyOwnClosedChatsAndSupportsLegacyRecords() {
+        putSession("legacy", SessionStatus.CLOSED, "operator");
+        ChatSessionDocument recent = putSession("recent", SessionStatus.CLOSED, "operator");
+        recent.setClosedAt(Instant.parse("2026-11-05T10:00:00Z"));
+        recent.setClosedBy("operator");
+        putSession("open", SessionStatus.OPEN, "operator");
+        ChatSessionDocument foreign = putSession("foreign", SessionStatus.CLOSED, "another");
+        foreign.setUserId("another-client");
+
+        assertThat(service.getClosedSessionsForUser("client")).extracting(ChatSessionDocument::getId)
+                .containsExactly("recent", "legacy");
+        assertThat(service.getClosedSessionsForUser("operator")).extracting(ChatSessionDocument::getId)
+                .containsExactly("recent", "legacy");
+        assertThat(service.closeSession("legacy", "operator").error()).isNull();
+        assertThat(sessions.get("legacy").getClosedAt()).isNull();
+        verify(messages, never()).insertIfAbsent(any());
+    }
+
     private void failNextPauseOf(String id) {
         AtomicBoolean failed = new AtomicBoolean();
         doAnswer(call -> {
@@ -286,6 +489,8 @@ class ChatSessionServiceTest {
     private ChatSessionDocument copy(ChatSessionDocument session) {
         return ChatSessionDocument.builder().id(session.getId()).userId(session.getUserId())
                 .executorId(session.getExecutorId()).clientRequestId(session.getClientRequestId())
-                .status(session.getStatus()).createdAt(session.getCreatedAt()).queuedAt(session.getQueuedAt()).build();
+                .status(session.getStatus()).createdAt(session.getCreatedAt()).queuedAt(session.getQueuedAt())
+                .closedAt(session.getClosedAt()).closedBy(session.getClosedBy())
+                .completionPending(session.isCompletionPending()).closureMessageId(session.getClosureMessageId()).build();
     }
 }

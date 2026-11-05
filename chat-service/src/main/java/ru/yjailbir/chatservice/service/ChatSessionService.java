@@ -6,11 +6,14 @@ import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import ru.yjailbir.chatservice.dto.ChatParticipantDto;
+import ru.yjailbir.chatservice.dto.ChatMessage;
+import ru.yjailbir.chatservice.dto.MessageType;
 import ru.yjailbir.chatservice.dto.IncomingChatDto;
 import ru.yjailbir.chatservice.dto.SessionEventDto;
 import ru.yjailbir.chatservice.dto.SessionStatus;
 import ru.yjailbir.chatservice.dto.ShiftStatus;
 import ru.yjailbir.chatservice.entity.ChatSessionDocument;
+import ru.yjailbir.chatservice.entity.ChatMessageDocument;
 import ru.yjailbir.chatservice.entity.ExecutorShiftDocument;
 import ru.yjailbir.chatservice.repository.ChatSessionRepository;
 import ru.yjailbir.chatservice.repository.ExecutorShiftRepository;
@@ -33,6 +36,7 @@ public class ChatSessionService {
     private final ChatSessionRepository sessionRepository;
     private final ExecutorShiftRepository shiftRepository;
     private final SimpMessagingTemplate messagingTemplate;
+    private final MessagePersistenceService messagePersistenceService;
 
     // Только доставка заявок привязана к транспорту. Смена хранится отдельно в MongoDB.
     private final Set<String> onlineExecutors = ConcurrentHashMap.newKeySet();
@@ -216,15 +220,88 @@ public class ChatSessionService {
         return Optional.of(session);
     }
 
-    public synchronized Optional<ChatSessionDocument> closeSession(String sessionId) {
-        ChatSessionDocument session = getSessionById(sessionId).orElse(null);
-        if (session == null || session.getStatus() == SessionStatus.CLOSED) {
-            return Optional.empty();
+    public synchronized CloseSessionResult closeSession(String sessionId, String executor) {
+        ChatSessionDocument session = sessionRepository.findById(sessionId).orElse(null);
+        if (session == null) {
+            return new CloseSessionResult(null, CloseSessionError.SESSION_NOT_FOUND);
+        }
+        if (!executor.equals(session.getExecutorId())) {
+            return new CloseSessionResult(null, CloseSessionError.NOT_SESSION_EXECUTOR);
+        }
+        // Подтверждение уже выполненного завершения доступно и после окончания смены.
+        if (session.getStatus() != SessionStatus.CLOSED) {
+            if (!isOnShift(executor)) {
+                return new CloseSessionResult(null, CloseSessionError.EXECUTOR_OFF_SHIFT);
+            }
+            if (session.getStatus() != SessionStatus.OPEN) {
+                return new CloseSessionResult(null, CloseSessionError.SESSION_NOT_OPEN);
+            }
+            session.setStatus(SessionStatus.CLOSED);
+            session.setClosedAt(Instant.now());
+            session.setClosedBy(executor);
+            session.setCompletionPending(true);
+            session.setClosureMessageId(UUID.randomUUID().toString());
+            sessionRepository.save(session);
         }
 
-        session.setStatus(SessionStatus.CLOSED);
-        sessionRepository.save(session);
-        return Optional.of(session);
+        completeSessionClosure(session);
+        return new CloseSessionResult(session, null);
+    }
+
+    private void completeSessionClosure(ChatSessionDocument session) {
+        ChatMessage systemMessage = null;
+        if (session.getClosureMessageId() != null) {
+            // Идентификатор и время стабильны при повторе и после перезапуска процесса.
+            systemMessage = new ChatMessage(session.getClosureMessageId(), session.getId(), "SYSTEM", "Сессия завершена",
+                    MessageType.SYSTEM, List.of(), session.getClosedAt());
+            systemMessage = messagePersistenceService.insertIfAbsent(ChatMessageDocument.from(systemMessage))
+                    .message().toChatMessage();
+        }
+
+        sendEvent(session.getUserId(), "/queue/session", new SessionEventDto(
+                session.getId(), session.getClientRequestId(), SessionStatus.CLOSED,
+                session.getExecutorId() == null ? null : new ChatParticipantDto(
+                        session.getExecutorId(), session.getExecutorId(), "EXECUTOR")));
+        if (systemMessage != null) {
+            sendEvent(session.getUserId(), "/queue/session-end", systemMessage);
+        }
+        if (session.getExecutorId() != null) {
+            sendEvent(session.getExecutorId(), "/queue/session", new SessionEventDto(
+                    session.getId(), session.getClientRequestId(), SessionStatus.CLOSED,
+                    new ChatParticipantDto(session.getUserId(), session.getUserId(), "USER")));
+            if (systemMessage != null) {
+                sendEvent(session.getExecutorId(), "/queue/session-end", systemMessage);
+            }
+        }
+        if (session.isCompletionPending()) {
+            session.setCompletionPending(false);
+            sessionRepository.save(session);
+        }
+    }
+
+    @Scheduled(fixedDelay = 5000, scheduler = "shiftRecoveryScheduler")
+    public synchronized void recoverInterruptedClosures() {
+        try {
+            for (ChatSessionDocument session :
+                    sessionRepository.findByStatusAndCompletionPendingTrue(SessionStatus.CLOSED)) {
+                try {
+                    completeSessionClosure(session);
+                } catch (RuntimeException e) {
+                    log.warn("Завершение чата {} будет повторено", session.getId(), e);
+                }
+            }
+        } catch (RuntimeException e) {
+            log.warn("Восстановление завершённых чатов будет повторено", e);
+        }
+    }
+
+    public synchronized List<ChatSessionDocument> getClosedSessionsForUser(String username) {
+        return sessionRepository.findClosedSessionsForUser(username).stream()
+                .filter(session -> isParticipant(session, username))
+                .sorted(Comparator.comparing((ChatSessionDocument session) ->
+                                session.getClosedAt() == null ? session.getCreatedAt() : session.getClosedAt())
+                        .reversed().thenComparing(ChatSessionDocument::getId))
+                .toList();
     }
 
     public synchronized Optional<ChatSessionDocument> getSessionById(String sessionId) {
@@ -241,5 +318,12 @@ public class ChatSessionService {
     }
 
     public record ChatRequestResult(ChatSessionDocument session, boolean created) {
+    }
+
+    public enum CloseSessionError {
+        SESSION_NOT_FOUND, NOT_SESSION_EXECUTOR, EXECUTOR_OFF_SHIFT, SESSION_NOT_OPEN
+    }
+
+    public record CloseSessionResult(ChatSessionDocument session, CloseSessionError error) {
     }
 }

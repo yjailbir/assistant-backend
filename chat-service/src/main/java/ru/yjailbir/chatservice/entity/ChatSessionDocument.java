@@ -32,4 +32,12 @@ public class ChatSessionDocument {
     private Instant createdAt;
 
     private Instant queuedAt;
+
+    private Instant closedAt;
+
+    private String closedBy;
+
+    private boolean completionPending;
+
+    private String closureMessageId;
 }

@@ -1,6 +1,7 @@
 package ru.yjailbir.chatservice.controller.stomp;
 
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.messaging.handler.annotation.MessageMapping;
 import org.springframework.messaging.handler.annotation.Payload;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
@@ -34,6 +35,7 @@ import java.util.UUID;
 
 @Controller
 @RequiredArgsConstructor
+@Slf4j
 public class ChatStompController {
     private static final int MAX_ATTACHMENTS_PER_MESSAGE = 10;
 
@@ -420,39 +422,34 @@ public class ChatStompController {
     private void endChatLocked(SessionIdRequest request, Principal principal) {
         String username = principal.getName();
         String sessionId = request == null ? null : request.sessionId();
-        Optional<ChatSessionDocument> sessionOpt = sessionId == null
-                ? Optional.empty()
-                : sessionService.getSessionById(sessionId);
-
-        if (sessionOpt.isEmpty()) {
-            sendError(username, "SESSION_NOT_FOUND", "Сессия не найдена", sessionId, null);
+        if (!(principal instanceof Authentication authentication) || !authentication.isAuthenticated() ||
+                authentication.getAuthorities().stream().noneMatch(role -> "ROLE_EXECUTOR".equals(role.getAuthority()))) {
+            sendError(username, "FORBIDDEN", "Завершить заявку может только оператор", sessionId, null);
             return;
         }
-        if (!isParticipant(sessionOpt.get(), username)) {
-            sendError(username, "NOT_SESSION_PARTICIPANT", "Вы не участник этой сессии", sessionId, null);
+        if (sessionId == null || sessionId.isBlank()) {
+            sendError(username, "INVALID_END_REQUEST", "Не указан sessionId", sessionId, null);
             return;
         }
 
-        ChatSessionDocument session = sessionService.closeSession(sessionId).orElse(null);
-        if (session == null) {
-            sendError(username, "SESSION_CLOSED", "Сессия уже завершена", sessionId, null);
+        ChatSessionService.CloseSessionResult result;
+        try {
+            result = sessionService.closeSession(sessionId, username);
+        } catch (RuntimeException e) {
+            log.warn("Не удалось подтвердить завершение чата {} оператором {}", sessionId, username, e);
+            sendError(username, "SESSION_END_FAILED",
+                    "Не удалось подтвердить завершение; запросите состояние заявки и повторите команду",
+                    sessionId, null);
             return;
         }
-
-        ChatMessage systemMessage = new ChatMessage(
-                UUID.randomUUID().toString(),
-                session.getId(),
-                "SYSTEM",
-                "Сессия завершена",
-                MessageType.SYSTEM,
-                List.of(),
-                Instant.now()
-        );
-        messagePersistenceService.save(ChatMessageDocument.from(systemMessage));
-
-        messagingTemplate.convertAndSendToUser(session.getUserId(), "/queue/session-end", systemMessage);
-        if (session.getExecutorId() != null) {
-            messagingTemplate.convertAndSendToUser(session.getExecutorId(), "/queue/session-end", systemMessage);
+        if (result.error() != null) {
+            String content = switch (result.error()) {
+                case SESSION_NOT_FOUND -> "Сессия не найдена";
+                case NOT_SESSION_EXECUTOR -> "Заявка не назначена вам; сначала примите её";
+                case EXECUTOR_OFF_SHIFT -> "Сначала выйдите на смену";
+                case SESSION_NOT_OPEN -> "Завершить можно только заявку в работе";
+            };
+            sendError(username, result.error().name(), content, sessionId, null);
         }
     }
 }
