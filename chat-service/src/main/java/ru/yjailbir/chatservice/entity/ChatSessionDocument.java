@@ -40,4 +40,6 @@ public class ChatSessionDocument {
     private boolean completionPending;
 
     private String closureMessageId;
+
+    private String closureComment;
 }

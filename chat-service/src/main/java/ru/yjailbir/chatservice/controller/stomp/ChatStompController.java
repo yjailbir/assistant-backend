@@ -11,6 +11,7 @@ import ru.yjailbir.chatservice.dto.ChatAttachmentDto;
 import ru.yjailbir.chatservice.dto.ChatMessage;
 import ru.yjailbir.chatservice.dto.ChatParticipantDto;
 import ru.yjailbir.chatservice.dto.ChatRequest;
+import ru.yjailbir.chatservice.dto.EndChatRequest;
 import ru.yjailbir.chatservice.dto.IncomingChatDto;
 import ru.yjailbir.chatservice.dto.MessageType;
 import ru.yjailbir.chatservice.dto.SendMessageRequest;
@@ -413,13 +414,13 @@ public class ChatStompController {
     }
 
     @MessageMapping("/chat.end")
-    public void endChat(@Payload(required = false) SessionIdRequest request, Principal principal) {
+    public void endChat(@Payload(required = false) EndChatRequest request, Principal principal) {
         synchronized (sessionService) {
             endChatLocked(request, principal);
         }
     }
 
-    private void endChatLocked(SessionIdRequest request, Principal principal) {
+    private void endChatLocked(EndChatRequest request, Principal principal) {
         String username = principal.getName();
         String sessionId = request == null ? null : request.sessionId();
         if (!(principal instanceof Authentication authentication) || !authentication.isAuthenticated() ||
@@ -434,7 +435,7 @@ public class ChatStompController {
 
         ChatSessionService.CloseSessionResult result;
         try {
-            result = sessionService.closeSession(sessionId, username);
+            result = sessionService.closeSession(sessionId, username, request.status(), request.comment());
         } catch (RuntimeException e) {
             log.warn("Не удалось подтвердить завершение чата {} оператором {}", sessionId, username, e);
             sendError(username, "SESSION_END_FAILED",
@@ -448,6 +449,7 @@ public class ChatStompController {
                 case NOT_SESSION_EXECUTOR -> "Заявка не назначена вам; сначала примите её";
                 case EXECUTOR_OFF_SHIFT -> "Сначала выйдите на смену";
                 case SESSION_NOT_OPEN -> "Завершить можно только заявку в работе";
+                case INVALID_END_REQUEST -> "Укажите статус CLOSED и непустой комментарий";
             };
             sendError(username, result.error().name(), content, sessionId, null);
         }

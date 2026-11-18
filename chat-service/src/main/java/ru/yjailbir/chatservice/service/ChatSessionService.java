@@ -220,7 +220,7 @@ public class ChatSessionService {
         return Optional.of(session);
     }
 
-    public synchronized CloseSessionResult closeSession(String sessionId, String executor) {
+    public synchronized CloseSessionResult closeSession(String sessionId, String executor, String status, String comment) {
         ChatSessionDocument session = sessionRepository.findById(sessionId).orElse(null);
         if (session == null) {
             return new CloseSessionResult(null, CloseSessionError.SESSION_NOT_FOUND);
@@ -236,11 +236,15 @@ public class ChatSessionService {
             if (session.getStatus() != SessionStatus.OPEN) {
                 return new CloseSessionResult(null, CloseSessionError.SESSION_NOT_OPEN);
             }
+            if (!SessionStatus.CLOSED.name().equals(status) || comment == null || comment.isBlank()) {
+                return new CloseSessionResult(null, CloseSessionError.INVALID_END_REQUEST);
+            }
             session.setStatus(SessionStatus.CLOSED);
             session.setClosedAt(Instant.now());
             session.setClosedBy(executor);
             session.setCompletionPending(true);
             session.setClosureMessageId(UUID.randomUUID().toString());
+            session.setClosureComment(comment);
             sessionRepository.save(session);
         }
 
@@ -252,7 +256,10 @@ public class ChatSessionService {
         ChatMessage systemMessage = null;
         if (session.getClosureMessageId() != null) {
             // Идентификатор и время стабильны при повторе и после перезапуска процесса.
-            systemMessage = new ChatMessage(session.getClosureMessageId(), session.getId(), "SYSTEM", "Сессия завершена",
+            String content = session.getClosureComment() == null
+                    ? "Сессия завершена"
+                    : "Заявка завершена\n\n" + session.getClosureComment();
+            systemMessage = new ChatMessage(session.getClosureMessageId(), session.getId(), "SYSTEM", content,
                     MessageType.SYSTEM, List.of(), session.getClosedAt());
             systemMessage = messagePersistenceService.insertIfAbsent(ChatMessageDocument.from(systemMessage))
                     .message().toChatMessage();
@@ -321,7 +328,7 @@ public class ChatSessionService {
     }
 
     public enum CloseSessionError {
-        SESSION_NOT_FOUND, NOT_SESSION_EXECUTOR, EXECUTOR_OFF_SHIFT, SESSION_NOT_OPEN
+        SESSION_NOT_FOUND, NOT_SESSION_EXECUTOR, EXECUTOR_OFF_SHIFT, SESSION_NOT_OPEN, INVALID_END_REQUEST
     }
 
     public record CloseSessionResult(ChatSessionDocument session, CloseSessionError error) {

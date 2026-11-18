@@ -11,6 +11,7 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import ru.yjailbir.chatservice.dto.ChatAttachmentDto;
 import ru.yjailbir.chatservice.dto.ChatMessage;
+import ru.yjailbir.chatservice.dto.EndChatRequest;
 import ru.yjailbir.chatservice.dto.MessageType;
 import ru.yjailbir.chatservice.dto.SendMessageRequest;
 import ru.yjailbir.chatservice.dto.SessionStatus;
@@ -41,6 +42,8 @@ class ChatStompControllerTest {
     private static final String SESSION_ID = "session-1";
     private static final String USER = "user-1";
     private static final String EXECUTOR = "executor-1";
+    private static final String COMMENT = "Заказ доставлен";
+    private static final EndChatRequest END_REQUEST = new EndChatRequest(SESSION_ID, "CLOSED", COMMENT);
     private static final String MESSAGE_ID = "8107660d-2626-4c75-b73d-59be5526997e";
 
     @Mock
@@ -68,8 +71,8 @@ class ChatStompControllerTest {
 
     @Test
     void clientCannotCompleteChat() {
-        controller.endChat(new SessionIdRequest(SESSION_ID), principal);
-        verify(sessionService, never()).closeSession(any(), any());
+        controller.endChat(END_REQUEST, principal);
+        verify(sessionService, never()).closeSession(any(), any(), any(), any());
         verify(messagingTemplate).convertAndSendToUser(eq(USER), eq("/queue/errors"),
                 eq(new StompErrorDto("FORBIDDEN", "Завершить заявку может только оператор", SESSION_ID, null)));
     }
@@ -79,8 +82,8 @@ class ChatStompControllerTest {
         Principal executor = new UsernamePasswordAuthenticationToken(EXECUTOR, null,
                 List.of(new SimpleGrantedAuthority("ROLE_EXECUTOR")));
         controller.endChat(null, executor);
-        controller.endChat(new SessionIdRequest(" "), executor);
-        verify(sessionService, never()).closeSession(any(), any());
+        controller.endChat(new EndChatRequest(" ", "CLOSED", COMMENT), executor);
+        verify(sessionService, never()).closeSession(any(), any(), any(), any());
         verify(messagingTemplate).convertAndSendToUser(eq(EXECUTOR), eq("/queue/errors"),
                 eq(new StompErrorDto("INVALID_END_REQUEST", "Не указан sessionId", null, null)));
     }
@@ -89,10 +92,10 @@ class ChatStompControllerTest {
     void completionDelegatesOwnershipAndShiftValidationToService() {
         Principal executor = new UsernamePasswordAuthenticationToken(EXECUTOR, null,
                 List.of(new SimpleGrantedAuthority("ROLE_EXECUTOR")));
-        when(sessionService.closeSession(SESSION_ID, EXECUTOR)).thenReturn(
+        when(sessionService.closeSession(SESSION_ID, EXECUTOR, "CLOSED", COMMENT)).thenReturn(
                 new ChatSessionService.CloseSessionResult(null, ChatSessionService.CloseSessionError.NOT_SESSION_EXECUTOR));
 
-        controller.endChat(new SessionIdRequest(SESSION_ID), executor);
+        controller.endChat(END_REQUEST, executor);
 
         verify(messagingTemplate).convertAndSendToUser(eq(EXECUTOR), eq("/queue/errors"),
                 eq(new StompErrorDto("NOT_SESSION_EXECUTOR", "Заявка не назначена вам; сначала примите её", SESSION_ID, null)));
@@ -104,12 +107,12 @@ class ChatStompControllerTest {
                 List.of(new SimpleGrantedAuthority("ROLE_EXECUTOR")));
         ChatSessionDocument session = openSession();
         session.setStatus(SessionStatus.CLOSED);
-        when(sessionService.closeSession(SESSION_ID, EXECUTOR))
+        when(sessionService.closeSession(SESSION_ID, EXECUTOR, null, null))
                 .thenReturn(new ChatSessionService.CloseSessionResult(session, null));
 
-        controller.endChat(new SessionIdRequest(SESSION_ID), executor);
+        controller.endChat(new EndChatRequest(SESSION_ID, null, null), executor);
 
-        verify(sessionService).closeSession(SESSION_ID, EXECUTOR);
+        verify(sessionService).closeSession(SESSION_ID, EXECUTOR, null, null);
         verify(sessionService, never()).isOnShift(any());
         verify(messagePersistenceService, never()).save(any());
         verify(messagingTemplate, never()).convertAndSendToUser(any(), eq("/queue/errors"), any(Object.class));
@@ -119,9 +122,10 @@ class ChatStompControllerTest {
     void completionFailureTellsExecutorToReconcileAndRetry() {
         Principal executor = new UsernamePasswordAuthenticationToken(EXECUTOR, null,
                 List.of(new SimpleGrantedAuthority("ROLE_EXECUTOR")));
-        when(sessionService.closeSession(SESSION_ID, EXECUTOR)).thenThrow(new IllegalStateException("database unavailable"));
+        when(sessionService.closeSession(SESSION_ID, EXECUTOR, "CLOSED", COMMENT))
+                .thenThrow(new IllegalStateException("database unavailable"));
 
-        controller.endChat(new SessionIdRequest(SESSION_ID), executor);
+        controller.endChat(END_REQUEST, executor);
 
         ArgumentCaptor<StompErrorDto> error = ArgumentCaptor.forClass(StompErrorDto.class);
         verify(messagingTemplate).convertAndSendToUser(eq(EXECUTOR), eq("/queue/errors"), error.capture());
